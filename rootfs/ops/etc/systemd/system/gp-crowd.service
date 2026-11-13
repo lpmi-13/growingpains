@@ -1,0 +1,12 @@
+[Unit]
+Description=Growing Pains crowd
+After=network-online.target
+[Service]
+Slice=gp-lab.slice
+ExecStart=/usr/local/bin/gp-crowd -listen=127.0.0.1:9101 -shop=http://node-01 -state=/var/lib/gp-crowd/run.json -autostart=3m
+StateDirectory=gp-crowd
+DynamicUser=yes
+Restart=always
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# All four nodes boot one image. This picks each node's role from its name, before k3s joins.
+[Unit]
+Description=Growing Pains node role
+Before=k3s-agent.service gp-agent.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/gp/node-role
+
+[Install]
+WantedBy=multi-user.target

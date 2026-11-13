@@ -1,0 +1,4 @@
+#!/bin/bash
+# The fleet took every request and the legacy process drained: stop it for good.
+set -euo pipefail
+systemctl disable --now gp-api.service

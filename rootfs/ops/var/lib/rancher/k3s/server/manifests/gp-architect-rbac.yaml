@@ -1,0 +1,60 @@
+# The architect's access: the shop's namespace, and the node fields it needs to acquire and
+# release dormant nodes. Not a shop object, so k3s may keep re-applying it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gp-architect
+  namespace: shop
+rules:
+  - apiGroups: ["", "apps", "policy", "autoscaling"]
+    resources: [pods, services, configmaps, deployments, poddisruptionbudgets, horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gp-architect
+  namespace: shop
+subjects: [{kind: User, name: gp-architect, apiGroup: rbac.authorization.k8s.io}]
+roleRef: {kind: Role, name: gp-architect, apiGroup: rbac.authorization.k8s.io}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gp-architect-nodes
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gp-architect-nodes
+subjects: [{kind: User, name: gp-architect, apiGroup: rbac.authorization.k8s.io}]
+roleRef: {kind: ClusterRole, name: gp-architect-nodes, apiGroup: rbac.authorization.k8s.io}
+---
+# Prometheus discovers and scrapes API pods directly; ops-01 is in the pod network.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gp-prometheus
+rules:
+  - apiGroups: [""]
+    resources: [pods, nodes, endpoints, services]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gp-prometheus
+subjects: [{kind: User, name: gp-prometheus, apiGroup: rbac.authorization.k8s.io}]
+roleRef: {kind: ClusterRole, name: gp-prometheus, apiGroup: rbac.authorization.k8s.io}

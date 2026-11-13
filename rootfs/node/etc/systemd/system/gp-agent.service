@@ -1,0 +1,14 @@
+[Unit]
+Description=Growing Pains node agent
+After=network-online.target gp-node-role.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/gp/agent.env
+ExecStart=/usr/local/bin/gp-agent -listen=:9102 $GP_AGENT_ARGS
+Restart=always
+RestartSec=2
+User=gp-agent
+
+[Install]
+WantedBy=multi-user.target

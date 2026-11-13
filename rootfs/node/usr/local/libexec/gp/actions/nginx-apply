@@ -1,0 +1,17 @@
+#!/bin/bash
+# Replace the shop's upstream with the one on stdin, test it, and reload gracefully. A config
+# that fails nginx -t is never installed.
+set -euo pipefail
+dir=/etc/nginx/gp
+new=$(mktemp "$dir/upstream.XXXXXX")
+trap 'rm -f "$new"' EXIT
+head -c 65536 >"$new"
+grep -q '^upstream shop {' "$new" || { echo "not an upstream for shop" >&2; exit 65; }
+cp -p "$dir/upstream.conf" "$dir/upstream.conf.previous"
+install -m 0644 "$new" "$dir/upstream.conf"
+if ! nginx -t -q; then
+  install -m 0644 "$dir/upstream.conf.previous" "$dir/upstream.conf"
+  echo "nginx -t failed; kept the previous upstream" >&2
+  exit 1
+fi
+systemctl reload nginx

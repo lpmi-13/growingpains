@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} · Growing Pains shop</title>
+<style>
+body{font:15px/1.45 system-ui,sans-serif;margin:0;background:#faf7f2;color:#2b2622}
+header{background:#2b2622;color:#faf7f2;padding:.7rem 1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+header a{color:#faf7f2;text-decoration:none}main{max-width:1100px;margin:auto;padding:1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:1rem}
+.card{background:#fff;border-radius:8px;padding:.6rem;box-shadow:0 1px 2px #0002}
+.card img,.ph{width:100%;aspect-ratio:4/3;object-fit:cover;background:#e9e1d6;border-radius:6px}
+.badge{font-size:.7rem;background:#c2562d;color:#fff;border-radius:4px;padding:0 .3rem;margin-right:.2rem}
+nav.cats a{display:inline-block;margin:.15rem .4rem .15rem 0}form input{padding:.3rem}
+.facets{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0}.facets li{background:#fff;border-radius:4px;padding:.1rem .4rem}
+</style>
+</head>
+<body>
+<header>
+  <a href="/"><b>Growing Pains shop</b></a>
+  <form action="/search"><input name="q" placeholder="Search" value="{{ q|default('') }}"></form>
+</header>
+<main>{% block main %}{% endblock %}</main>
+</body>
+</html>

@@ -1,0 +1,33 @@
+#!/bin/bash
+# Configure this node for its role, by hostname:
+#   node-01        the whole shop at genesis: nginx, the API process, the PostgreSQL primary.
+#                  Tainted for data, so no API pods land here.
+#   node-02, -03   compute: dormant until the architect acquires them.
+#   node-04        data: dormant until the architect acquires it for a replica or similar.
+set -euo pipefail
+name=$(hostname -s)
+cfg=/etc/rancher/k3s/config.yaml
+units="db-primary=/sys/fs/cgroup/system.slice/system-postgresql.slice/postgresql@18-main.service"
+units="$units db-replica-1=/sys/fs/cgroup/system.slice/gp-pg-replica.service"
+args="-unit=${units// / -unit=}"
+case "$name" in
+  node-01)
+    role=edge-data taint="growing-pains/data=true:NoSchedule"
+    args="$args -unit=api=/sys/fs/cgroup/system.slice/gp-api.service -unit=nginx=/sys/fs/cgroup/system.slice/nginx.service"
+    args="$args -edge-syslog=127.0.0.1:5140 -db=primary=$(cat /etc/gp/agent-dsn)"
+    systemctl enable --no-block --now postgresql@18-main.service nginx.service gp-api.service ;;
+  node-04)
+    role=data taint="growing-pains/dormant=true:NoSchedule"
+    args="$args -db=replica-1=$(cat /etc/gp/agent-dsn | sed 's/host=[^ ]*/host=127.0.0.1/')" ;;
+  *)
+    role=compute taint="growing-pains/dormant=true:NoSchedule" ;;
+esac
+# k3s applies labels and taints when the node first registers.
+sed -i '/^node-label:/,$d' "$cfg"
+cat >>"$cfg" <<CONF
+node-label:
+  - growing-pains/role=$role
+node-taint:
+  - $taint
+CONF
+echo "GP_AGENT_ARGS=$args" >/etc/gp/agent.env

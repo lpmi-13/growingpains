@@ -1,0 +1,11 @@
+[Unit]
+Description=Grafana
+After=network-online.target
+[Service]
+User=grafana
+EnvironmentFile=/etc/grafana/grafana.env
+WorkingDirectory=/opt/grafana
+ExecStart=/opt/grafana/bin/grafana server --homepath=/opt/grafana --config=/etc/grafana/grafana.ini
+Restart=always
+[Install]
+WantedBy=multi-user.target

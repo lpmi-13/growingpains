@@ -1,0 +1,6 @@
+#!/bin/bash
+# Raise or lower the primary's CPU quota live. A cloud database usually needs a restart or a
+# failover for this; the decision record says so.
+set -euo pipefail
+[[ "$1" =~ ^[0-9]{2,3}%$ ]] || { echo "quota must look like 150%" >&2; exit 64; }
+systemctl set-property postgresql@18-main.service CPUQuota="$1"

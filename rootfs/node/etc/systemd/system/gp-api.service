@@ -1,0 +1,27 @@
+# Genesis: the shop's API as one process with one worker, on node-01. It runs the shop
+# container image's own filesystem, so the first move hands over to the same build in k3s.
+[Unit]
+Description=Growing Pains API (genesis, one process)
+After=network-online.target postgresql@18-main.service
+Wants=network-online.target
+
+[Service]
+RootDirectory=/opt/shop/rootfs
+BindReadOnlyPaths=/etc/hosts /etc/resolv.conf
+EnvironmentFile=/etc/gp/api.env
+Environment=GP_INSTANCE=legacy PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/shop
+ExecStart=/usr/local/bin/uvicorn gp_shop.app:app --host 0.0.0.0 --port 8000 --loop uvloop --http httptools --no-access-log --timeout-graceful-shutdown 20 --backlog 2048
+User=65534
+Group=65534
+# One core, like an API pod's limit. A 10 ms period throttles a small quota smoothly.
+CPUQuota=100%
+CPUQuotaPeriodSec=10ms
+MemoryMax=512M
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

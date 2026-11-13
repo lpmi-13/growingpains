@@ -1,0 +1,27 @@
+name: api-scale-up
+title: Scale the API up with more worker processes on node-01
+class: tuning
+family: volume
+answers: api-compute
+shape:
+  - "db.cpu_ratio < 0.5"
+preconditions:
+  - "state.api_mode == 'systemd'"
+# One more worker process needs a core on the same box as the database.
+footprint:
+  - {node: node-01, component: api-legacy, kind: api, cpu: 1.0, memory_mib: 150}
+relief: "api.cpu_ratio * 1.0"
+relief_unit: cores of API work spread across processes
+new_components: 0
+steps:
+  - name: add-worker
+    phase: expand
+    action: node.run
+    params: {node: node-01, script: api-legacy-workers, args: ["2"]}
+    timeout: 60s
+verify:
+  settle: 60s
+  checks: ["api.queue_time_p95 < 0.010"]
+effects: {}
+why: "Scaling up first is the simplest fix."
+rejected: "Scaling up first lost: {{.reason}}, and more workers there would starve the database."

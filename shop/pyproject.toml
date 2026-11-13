@@ -1,0 +1,30 @@
+[project]
+name = "gp-shop"
+version = "0.1.0"
+description = "The Growing Pains shop: the system that grows"
+requires-python = ">=3.14"
+# Pinned to what the container image installs (see Dockerfile). uvicorn's [standard] extra
+# does not resolve on 3.15 yet, so its speedups are listed directly.
+dependencies = [
+  "starlette>=0.50,<1.1",
+  "uvicorn>=0.40",
+  "uvloop>=0.21",
+  "httptools>=0.6",
+  "psycopg[binary,pool]>=3.3,<3.4",
+  "prometheus-client>=0.21",
+  "orjson>=3.10",
+  "pillow>=12",
+  "valkey>=6.1",
+  "jinja2>=3.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.0", "httpx>=0.28"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["postgres: needs Docker to run a real PostgreSQL 18"]

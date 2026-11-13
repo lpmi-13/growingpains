@@ -1,0 +1,5 @@
+#!/bin/bash
+# Undo pg-replica-create. The primary's slot is dropped separately, by SQL.
+set -euo pipefail
+systemctl disable --now gp-pg-replica.service 2>/dev/null || true
+rm -rf /var/lib/gp/pg-replica

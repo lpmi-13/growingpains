@@ -1,0 +1,109 @@
+# A local stand-in for the playground at genesis: node-01's nginx, one API process capped at one
+# core, and PostgreSQL capped at 1.5 cores and 1.5 GiB, plus ops-01's Prometheus, Grafana, crowd,
+# and prober. Capacity numbers from here are leads for the spike, not the playground's numbers.
+#
+#   make dev-up      # build, seed, and start
+#   make dev-start   # press Start: the crowd begins the storyline
+name: growingpains
+services:
+  db:
+    image: postgres:18
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    environment: {POSTGRES_USER: shop, POSTGRES_PASSWORD: shop, POSTGRES_DB: shop}
+    volumes:
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./.data/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - db:/var/lib/postgresql
+    cpus: 1.5
+    mem_limit: 1536m
+    shm_size: 640m
+    cgroup_parent: gp-db.slice
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "shop", "-d", "shop"]
+      interval: 2s
+      retries: 300
+  api:
+    build: ../shop
+    environment:
+      GP_DATABASE_URL: postgresql://shop:shop@db:5432/shop
+      GP_INSTANCE: legacy
+      GP_CONFIG_URL: ${GP_CONFIG_URL:-}
+    cpus: 1.0
+    mem_limit: 512m
+    cgroup_parent: gp-api.slice
+    depends_on: {db: {condition: service_healthy}}
+  edge:
+    image: nginx:1.28.3
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../deploy/nginx/shop.conf:/etc/nginx/conf.d/shop.conf:ro
+      - ./upstream.conf:/etc/nginx/gp/upstream.conf:ro
+    ports: ["127.0.0.1:18080:80"]
+    depends_on: [api]
+  agent:
+    image: growingpains-lab
+    build: {context: .., dockerfile: build/lab.Dockerfile}
+    network_mode: service:edge
+    command:
+      - gp-agent
+      - -listen=:9102
+      - -edge-syslog=127.0.0.1:5140
+      - -unit=api=/sys/fs/cgroup/gp.slice/gp-api.slice/docker-*.scope
+      - -unit=db-primary=/sys/fs/cgroup/gp.slice/gp-db.slice/docker-*.scope
+      - -db=primary=postgres://shop:shop@db:5432/shop
+    volumes: ["/sys/fs/cgroup:/sys/fs/cgroup:ro"]
+    depends_on: [edge]
+  crowd:
+    image: growingpains-lab
+    command: ["gp-crowd", "-listen=:9101", "-shop=http://edge:80", "-storyline=${GP_STORYLINE:-word-gets-out}"]
+    ports: ["127.0.0.1:9101:9101"]
+    cpus: 0.75
+    depends_on: [edge]
+  prober:
+    image: growingpains-lab
+    command: ["gp-prober", "-listen=:9103", "-shop=http://edge:80"]
+    depends_on: [edge]
+  architect:
+    image: growingpains-lab
+    # Observe-only until the local stack has actuators: it measures, arms, and diagnoses, and
+    # records why it would move, but never changes the shop (the plan's control run).
+    command:
+      - gp-architect
+      - -listen=:7000
+      - -prometheus=http://prometheus:9090
+      - -state=/data/state.json
+      - -events=/data/events.jsonl
+      - -config=/data/runtime-config.json
+      - -grafana=http://grafana:3000
+      - -grafana-password=admin
+      - -observe
+    user: "0"
+    volumes: ["architect:/data"]
+    ports: ["127.0.0.1:7000:7000"]
+  narrator:
+    image: growingpains-lab
+    command: ["gp-narrator", "-listen=:8080", "-architect=http://architect:7000", "-crowd=http://crowd:9101",
+              "-prometheus=http://prometheus:9090", "-grafana=http://grafana:3000", "-grafana-password=admin"]
+    ports: ["127.0.0.1:18081:8080"]
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=8h", "--web.enable-lifecycle"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../deploy/prometheus/rules:/etc/prometheus/rules:ro
+    ports: ["127.0.0.1:9090:9090"]
+  grafana:
+    image: grafana/grafana:13.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 5s
+    volumes:
+      - ../deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+volumes:
+  db: {}
+  architect: {}

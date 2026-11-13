@@ -1,0 +1,42 @@
+name: connection-pooler
+title: A connection pooler
+class: architecture
+family: clients-connections
+answers: db-connections
+preconditions:
+  - "state.pooler == false"
+footprint:
+  - {node: node-01, component: pgbouncer, kind: pgbouncer, cpu: 0.1, memory_mib: 30}
+relief: "db.connections_ratio"
+relief_unit: share of connections
+new_components: 1
+steps:
+  - name: start-pooler
+    phase: expand
+    action: node.run
+    params: {node: node-01, script: pgbouncer-start}
+    timeout: 60s
+    says: "PgBouncer in transaction mode with max_prepared_statements, so prepared statements keep working"
+  - name: roll-fleet
+    phase: migrate
+    action: kube.rollout
+    params: {manifest: api-fleet, env: {GP_DATABASE_URL: "${pooler_dsn}"}}
+    wait_for: fleet_ready
+    timeout: 180s
+verify:
+  settle: 60s
+  checks: ["db.connections_ratio < 0.5"]
+rollback:
+  - name: roll-back
+    action: kube.rollout
+    params: {manifest: api-fleet, env: {GP_DATABASE_URL: "${primary_dsn}"}}
+    wait_for: fleet_ready
+    timeout: 180s
+  - name: stop-pooler
+    action: node.run
+    params: {node: node-01, script: pgbouncer-stop}
+    timeout: 60s
+effects:
+  pooler: true
+why: "Many pods with pools of their own hold {{pct .db.connections_ratio}} of the primary's connections; a pooler multiplexes them onto a few."
+rejected: "A pooler lost: {{.reason}}."

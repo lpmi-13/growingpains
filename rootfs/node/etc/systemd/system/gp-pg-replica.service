@@ -1,0 +1,22 @@
+# A streaming read replica, created by the architect's pg-replica-create action, under the
+# same caps as the primary.
+[Unit]
+Description=Growing Pains PostgreSQL read replica
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=postgres
+Group=postgres
+ExecStart=/usr/lib/postgresql/18/bin/postgres -D /var/lib/gp/pg-replica -c config_file=/etc/gp/pg-replica.conf
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutSec=120
+CPUQuota=150%
+CPUQuotaPeriodSec=10ms
+MemoryMax=1536M
+
+[Install]
+WantedBy=multi-user.target

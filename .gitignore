@@ -1,0 +1,7 @@
+dev/.data/
+shop/.venv/
+**/__pycache__/
+.pytest_cache/
+*.log
+rootfs/generated/
+e2e/.logs/

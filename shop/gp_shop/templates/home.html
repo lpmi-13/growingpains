@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% from "macros.html" import card %}
+{% block title %}Home{% endblock %}
+{% block main %}
+<nav class="cats">{% for c in categories %}<a href="/products?category={{ c.slug }}">{{ c.name }}</a>{% endfor %}</nav>
+<h2>New this week</h2>
+<div class="grid">{% for c in featured %}{{ card(c) }}{% endfor %}</div>
+{% endblock %}

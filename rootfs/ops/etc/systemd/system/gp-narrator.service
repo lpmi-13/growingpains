@@ -1,0 +1,10 @@
+[Unit]
+Description=Growing Pains narrator page
+After=network-online.target gp-architect.service
+[Service]
+EnvironmentFile=/etc/gp/architect.env
+ExecStart=/usr/local/bin/gp-narrator -listen=:8080 -architect=http://127.0.0.1:7000 -crowd=http://127.0.0.1:9101 -prometheus=http://127.0.0.1:9090 -grafana=http://127.0.0.1:3000
+Restart=always
+DynamicUser=yes
+[Install]
+WantedBy=multi-user.target

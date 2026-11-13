@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% from "macros.html" import card %}
+{% block title %}Search: {{ q }}{% endblock %}
+{% block main %}
+<h1>Results for “{{ q }}”</h1>
+<p>{{ count }} found</p>
+<div class="grid">{% for r in results %}{{ card(r, r.snippet) }}{% endfor %}</div>
+{% endblock %}

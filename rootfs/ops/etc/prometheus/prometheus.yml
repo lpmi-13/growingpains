@@ -1,0 +1,42 @@
+# ops-01: a 5 s scrape, because a move happens within about a minute.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+rule_files:
+  - /etc/prometheus/rules/*.yml
+scrape_configs:
+  - job_name: api
+    # The genesis process on node-01, until the fleet replaces it.
+    static_configs: [{targets: ["node-01:8000"], labels: {instance: legacy}}]
+  - job_name: api-pods
+    kubernetes_sd_configs:
+      - role: pod
+        api_server: https://127.0.0.1:6443
+        namespaces: {names: [shop]}
+        bearer_token_file: /etc/prometheus/k8s.token
+        # The API server on this VM's loopback; its CA file is readable only by root.
+        tls_config: {insecure_skip_verify: true}
+    relabel_configs:
+      - {source_labels: [__meta_kubernetes_pod_label_app], regex: api, action: keep}
+      - {source_labels: [__meta_kubernetes_pod_ready], regex: "true", action: keep}
+      - {source_labels: [__meta_kubernetes_pod_ip], replacement: "$1:8000", target_label: __address__}
+      - {source_labels: [__meta_kubernetes_pod_name], target_label: instance}
+      - {target_label: job, replacement: api}
+  - job_name: agent
+    static_configs:
+      - targets: ["node-01:9102", "node-02:9102", "node-03:9102", "node-04:9102"]
+    relabel_configs:
+      - {source_labels: [__address__], regex: "([^:]+):.*", target_label: node}
+  - job_name: node
+    static_configs:
+      - targets: ["ops-01:9100", "node-01:9100", "node-02:9100", "node-03:9100", "node-04:9100"]
+    relabel_configs:
+      - {source_labels: [__address__], regex: "([^:]+):.*", target_label: node}
+  - job_name: crowd
+    static_configs: [{targets: ["127.0.0.1:9101"]}]
+  - job_name: prober
+    static_configs: [{targets: ["127.0.0.1:9103"]}]
+  - job_name: architect
+    static_configs: [{targets: ["127.0.0.1:7000"]}]
+  - job_name: prometheus
+    static_configs: [{targets: ["127.0.0.1:9090"]}]

@@ -1,0 +1,3 @@
+#!/bin/bash
+# For the spike: what this node is running.
+systemctl --no-pager --plain list-units 'gp-*' 'postgresql@*' nginx.service pgbouncer.service 2>/dev/null | head -20

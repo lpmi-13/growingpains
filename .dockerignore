@@ -1,0 +1,5 @@
+.git
+shop/.venv
+**/__pycache__
+dev/.data
+*.log

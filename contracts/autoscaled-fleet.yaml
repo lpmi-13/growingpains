@@ -1,0 +1,99 @@
+name: autoscaled-fleet
+title: From one process to an autoscaled fleet
+class: architecture
+family: volume
+answers: api-compute
+# The API, not the database, must be the bottleneck.
+shape:
+  - "db.cpu_ratio < 0.5"
+preconditions:
+  - "state.api_mode == 'systemd'"
+# Six pods at 600m requests, three per compute node. Limits are 1 core, so pods can burst.
+footprint:
+  - {node: node-02, component: api-fleet, kind: api-fleet, cpu: 1.8, memory_mib: 450, acquire: true}
+  - {node: node-03, component: api-fleet, kind: api-fleet, cpu: 1.8, memory_mib: 450, acquire: true}
+relief: "api.cpu_ratio * 1.0"
+relief_unit: cores of API work spread across the fleet
+new_components: 1
+# The fleet's own errors, not the overload the move exists to cure.
+guards:
+  - "api.fleet_error_ratio < 0.02"
+steps:
+  - name: acquire
+    phase: expand
+    action: nodes.acquire
+    params: {nodes: [node-02, node-03]}
+    wait_for: nodes_ready
+    timeout: 60s
+    says: "Acquired node-02 and node-03"
+  - name: deploy
+    phase: expand
+    action: kube.apply
+    params: {manifest: api-fleet}
+    wait_for: fleet_ready
+    timeout: 120s
+    says: "Deployment of 2 pods with an HPA from 2 to 6, a PodDisruptionBudget, and spread across nodes"
+  - name: barrier
+    phase: expand
+    wait_for: fleet_converged
+    timeout: 60s
+    says: "Barrier: both pods ready, config converged, a smoke request answered by each pod"
+  - name: shift-10
+    phase: migrate
+    action: edge.weights
+    params: {legacy: 90, fleet: 10}
+    hold: 15s
+    timeout: 60s
+  - name: shift-50
+    phase: migrate
+    action: edge.weights
+    params: {legacy: 50, fleet: 50}
+    hold: 15s
+    timeout: 60s
+  - name: shift-100
+    phase: migrate
+    action: edge.weights
+    params: {legacy: 0, fleet: 100}
+    hold: 15s
+    timeout: 60s
+    says: "Traffic shifted from the process to the fleet: 10% → 50% → 100%, 15 s apart"
+  - name: drain-legacy
+    phase: contract
+    action: edge.remove_legacy
+    hold: 20s
+    timeout: 60s
+  - name: stop-legacy
+    phase: contract
+    action: node.run
+    params: {node: node-01, script: api-legacy-stop}
+    timeout: 60s
+    says: "The legacy process drained for 20 s, then stopped and disabled"
+verify:
+  settle: 60s
+  checks:
+    - "api.queue_time_p95 < 0.010"
+  target: "api.queue_time_p95"
+  expect: "0.005"
+rollback:
+  - name: weights-back
+    action: edge.weights
+    params: {legacy: 100, fleet: 0}
+    hold: 10s
+    timeout: 60s
+  - name: delete-fleet
+    action: kube.delete
+    params: {manifest: api-fleet}
+    timeout: 60s
+  - name: release-nodes
+    action: nodes.release
+    params: {nodes: [node-02, node-03]}
+    timeout: 60s
+effects:
+  api_mode: fleet
+  hpa_max: 6
+  retire: [api-legacy]
+why: >-
+  One API process is at {{pct .api.cpu_ratio}} of its core while the database is at {{pct .db.cpu_ratio}} of
+  its limit, so the API, not the database, is the bottleneck. A stateless tier is the simplest to scale out.
+rejected: >-
+  A fleet of API pods would not help: {{.reason}}.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Growing Pains prober
+After=network-online.target
+[Service]
+Slice=gp-lab.slice
+ExecStart=/usr/local/bin/gp-prober -listen=127.0.0.1:9103 -shop=http://node-01
+DynamicUser=yes
+Restart=always
+[Install]
+WantedBy=multi-user.target

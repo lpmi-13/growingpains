@@ -1,0 +1,28 @@
+name: second-replica
+title: Add a second read replica
+class: architecture
+family: read-pattern
+answers: db-read
+# Any read pattern: a replica copies every row, so ranking, not shape, decides against it when
+# reads concentrate on a few keys.
+preconditions:
+  - "state.replicas == 1"
+footprint:
+  - {node: any, component: pg-replica-2, kind: postgres-replica, cpu: 1.5, memory_mib: 1536}
+relief: "db.read_cpu_ratio * state.db_cores / 2"
+relief_unit: database cores
+new_components: 1
+steps:
+  - name: basebackup
+    phase: expand
+    action: node.run
+    params: {script: pg-replica-create, args: [node-01, replica_2]}
+    wait_for: replica_streaming
+    timeout: 120s
+verify:
+  settle: 60s
+  checks: ["db.repl_lag < 1"]
+effects:
+  replicas: 2
+why: "Unique reads need more database capacity."
+rejected: "A second replica lost: {{.reason}}."

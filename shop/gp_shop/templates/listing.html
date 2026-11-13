@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% from "macros.html" import card %}
+{% block title %}{{ category.name }}{% endblock %}
+{% block main %}
+<h1>{{ category.name }}</h1>
+<p>{{ "{:,}".format(total) }} products · sort by
+{% for s in sorts %}<a href="/products?category={{ category.slug }}&amp;sort={{ s }}">{{ s|replace('_', ' ') }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<ul class="facets">{% for f in facets %}<li>{{ f.label }} ({{ f.count }})</li>{% endfor %}</ul>
+<div class="grid">{% for c in items %}{{ card(c) }}{% endfor %}</div>
+<p>Page {{ page }} of {{ pages }}
+{% if page < pages %}<a href="/products?category={{ category.slug }}&amp;sort={{ sort }}&amp;page={{ page + 1 }}">Next page</a>{% endif %}</p>
+{% endblock %}

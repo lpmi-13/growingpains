@@ -1,0 +1,26 @@
+name: db-scale-up
+title: Scale the database up
+class: tuning
+family: read-pattern
+answers: db-read
+preconditions: []
+# Half a core more for the primary, on its own node.
+footprint:
+  - {node: node-01, component: pg-primary, kind: postgres-primary, cpu: 0.5, memory_mib: 0}
+relief: "0.5"
+relief_unit: database cores
+new_components: 0
+steps:
+  - name: raise-quota
+    phase: expand
+    action: node.run
+    params: {node: node-01, script: pg-cap, args: ["200%"]}
+    timeout: 30s
+    says: "Raised the primary's CPU quota live with systemctl set-property. A cloud database usually needs a restart or failover here."
+verify:
+  settle: 60s
+  checks: ["db.cpu_ratio < 0.7"]
+effects:
+  db_primary_cores: 2.0
+why: "Scaling up first is the simplest fix."
+rejected: "Vertical scale lost: {{.reason}}."

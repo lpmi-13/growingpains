@@ -1,0 +1,90 @@
+# The judge: recording rules that turn client-side measurements into SLIs, error budgets, and
+# burn rates. Measurements come from the crowd and the prober, because that is what users see.
+#
+# Targets (plan, "SLOs and the Grafana dashboard"), to be replaced by measured baselines:
+#   availability per journey >= 99.5% non-5xx and non-timeout over a rolling 5 minutes
+#   read latency p95 <= 250 ms, p99 <= 800 ms; write latency p95 <= 400 ms
+#   read-your-writes violations 0; acknowledged writes lost 0
+#   staleness p99 <= 2 s for details, <= 15 s for listings
+#
+# Audit reads (journey="audit") check the ledger, and the prober's freshness polls ("probe") and
+# setup are not user journeys, so they are excluded. The prober's journeys count with the crowd's.
+groups:
+  - name: judge
+    interval: 5s
+    rules:
+      # --- Availability ---
+      - record: slo:requests:rate1m
+        expr: sum by (journey) (rate(gp_crowd_requests_total{journey!~"audit|probe|setup"}[1m]))
+      - record: slo:errors:rate1m
+        expr: sum by (journey) (rate(gp_crowd_requests_total{journey!~"audit|probe|setup",outcome=~"error_5xx|timeout|conn_error"}[1m]))
+      - record: slo:requests:rate5m
+        expr: sum by (journey) (rate(gp_crowd_requests_total{journey!~"audit|probe|setup"}[5m]))
+      - record: slo:errors:rate5m
+        expr: sum by (journey) (rate(gp_crowd_requests_total{journey!~"audit|probe|setup",outcome=~"error_5xx|timeout|conn_error"}[5m]))
+      - record: slo:availability:ratio_rate5m
+        expr: 1 - (slo:errors:rate5m or slo:requests:rate5m * 0) / slo:requests:rate5m
+      - record: slo:availability:ratio_rate1m
+        expr: 1 - (slo:errors:rate1m or slo:requests:rate1m * 0) / slo:requests:rate1m
+      - record: slo:availability:worst_rate5m
+        expr: min(slo:availability:ratio_rate5m)
+
+      # --- Latency ---
+      - record: slo:read_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(gp_crowd_request_duration_seconds_bucket{kind="read",journey!~"audit|probe|setup"}[5m])))
+      - record: slo:read_latency_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(gp_crowd_request_duration_seconds_bucket{kind="read",journey!~"audit|probe|setup"}[5m])))
+      - record: slo:write_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(gp_crowd_request_duration_seconds_bucket{kind="write"}[5m])))
+      - record: slo:read_latency_seconds:p95_1m
+        expr: histogram_quantile(0.95, sum by (le) (rate(gp_crowd_request_duration_seconds_bucket{kind="read",journey!~"audit|probe|setup"}[1m])))
+      - record: slo:read_latency_seconds:p99_1m
+        expr: histogram_quantile(0.99, sum by (le) (rate(gp_crowd_request_duration_seconds_bucket{kind="read",journey!~"audit|probe|setup"}[1m])))
+      - record: slo:write_latency_seconds:p95_1m
+        expr: histogram_quantile(0.95, sum by (le) (rate(gp_crowd_request_duration_seconds_bucket{kind="write"}[1m])))
+      - record: slo:latency_by_journey_seconds:p95_1m
+        expr: histogram_quantile(0.95, sum by (journey, le) (rate(gp_crowd_request_duration_seconds_bucket{journey!~"audit|probe|setup"}[1m])))
+      - record: slo:latency_by_journey_seconds:p50_1m
+        expr: histogram_quantile(0.50, sum by (journey, le) (rate(gp_crowd_request_duration_seconds_bucket{journey!~"audit|probe|setup"}[1m])))
+      - record: slo:latency_by_journey_seconds:p99_1m
+        expr: histogram_quantile(0.99, sum by (journey, le) (rate(gp_crowd_request_duration_seconds_bucket{journey!~"audit|probe|setup"}[1m])))
+      # 1 while a 1-minute window meets every latency target, else 0.
+      - record: slo:latency_ok:1m
+        expr: |
+          (slo:read_latency_seconds:p95_1m <= bool 0.25)
+          * on() (slo:read_latency_seconds:p99_1m <= bool 0.8)
+          * on() ((slo:write_latency_seconds:p95_1m or vector(0)) <= bool 0.4)
+
+      # --- Correctness ---
+      - record: slo:read_your_writes_violations:total
+        expr: sum(gp_crowd_correctness_errors_total{kind="read_your_writes"}) + (sum(gp_probe_correctness_errors_total{kind="read_your_writes"}) or vector(0))
+      - record: slo:acknowledged_writes_lost:total
+        expr: sum(gp_crowd_correctness_errors_total{kind=~"lost|missing|stale"})
+      - record: slo:staleness_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (view, le) (rate(gp_probe_staleness_seconds_bucket{session="new"}[5m])))
+
+      # --- Error budget for the run: 0.5% of requests may fail ---
+      # The budget is 0.5% of the run's projected size: requests so far, plus the current rate for
+      # the rest of a nominal 15-minute run. Counting only requests so far would make a handful
+      # of early errors look like a spent budget.
+      - record: slo:run_requests:total
+        expr: sum(gp_crowd_requests_total{phase="run",journey!~"audit|probe|setup"})
+      - record: slo:run_errors:total
+        expr: sum(gp_crowd_requests_total{phase="run",journey!~"audit|probe|setup",outcome=~"error_5xx|timeout|conn_error"}) or vector(0)
+      - record: slo:run_requests:projected
+        expr: slo:run_requests:total + sum(slo:requests:rate1m) * clamp_min(900 - max(gp_run_elapsed_seconds), 0)
+      - record: slo:error_budget:remaining_ratio
+        expr: clamp_min(1 - slo:run_errors:total / clamp_min(0.005 * slo:run_requests:projected, 1), -1)
+      # Burn rate: the error ratio over a window divided by the 0.5% the SLO allows.
+      - record: slo:burn_rate:1m
+        expr: (sum(slo:errors:rate1m) or vector(0)) / sum(slo:requests:rate1m) / 0.005
+      - record: slo:burn_rate:5m
+        expr: (sum(slo:errors:rate5m) or vector(0)) / sum(slo:requests:rate5m) / 0.005
+
+      # --- Offered load: a falling completion rate must not look like success ---
+      - record: crowd:offered_sessions:rate1m
+        expr: sum by (source) (rate(gp_crowd_sessions_total{event="scheduled"}[1m]))
+      - record: crowd:refused_sessions:rate1m
+        expr: sum by (source) (rate(gp_crowd_sessions_total{event="refused"}[1m]))
+      - record: crowd:achieved_requests:rate1m
+        expr: sum(rate(gp_crowd_requests_total{journey!~"audit|probe|setup"}[1m]))

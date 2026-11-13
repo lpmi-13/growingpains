@@ -1,0 +1,102 @@
+name: read-replica
+title: Add a read replica
+class: architecture
+family: read-pattern
+answers: db-read
+# Reads are spread across the catalog (a cache would catch few of them), and no single
+# sequential scan dominates (an index would come first).
+shape:
+  - "reads.repeat_ratio < 0.4"
+  - "db.seqscan_rows < 2000000"
+preconditions:
+  - "state.replicas == 0"
+footprint:
+  - {node: node-04, component: pg-replica-1, kind: postgres-replica, cpu: 1.5, memory_mib: 1536, acquire: true}
+relief: "db.primary_cpu_ratio * state.db_primary_cores * db.read_share * (1 - reads.token_share) * 2 / 3"
+relief_unit: database cores
+new_components: 1
+guards:
+  - "db.repl_lag < 1"
+steps:
+  - name: acquire
+    phase: expand
+    action: nodes.acquire
+    params: {nodes: [node-04], reserve: {cpu: "1500m", memory: "1536Mi"}}
+    wait_for: nodes_ready
+    timeout: 60s
+    says: "Acquired node-04 and reserved 1.5 cores and 1.5 GiB for the replica"
+  - name: replication-slot
+    phase: expand
+    action: sql.primary
+    params: {statement: ensure_replication, slot: replica_1}
+    timeout: 30s
+  - name: basebackup
+    phase: expand
+    action: node.run
+    params: {node: node-04, script: pg-replica-create, args: [node-01, replica_1]}
+    wait_for: replica_streaming
+    timeout: 120s
+    says: "Base backup and streaming with a physical slot"
+  - name: catch-up
+    phase: expand
+    check: "db.repl_lag < 0.2"
+    hold: 20s
+    timeout: 90s
+    says: "Barrier: replay lag under 200 ms for 20 s"
+  - name: route-10
+    phase: migrate
+    action: config.set
+    params: {read_routing: {replicas: ["${replica_dsn}"], replica_pct: 10}}
+    wait_for: config_converged
+    hold: 20s
+    timeout: 60s
+  - name: route-50
+    phase: migrate
+    action: config.set
+    params: {read_routing: {replica_pct: 50}}
+    wait_for: config_converged
+    hold: 20s
+    timeout: 60s
+  # At full rollout the primary stays in the read pool at half a replica's weight: it keeps the
+  # writes and every token-carrying read, so it gets a smaller share of the rest.
+  - name: route-100
+    phase: migrate
+    action: config.set
+    params: {read_routing: {replica_pct: 100, primary_weight: 0.5}}
+    wait_for: config_converged
+    hold: 20s
+    timeout: 60s
+    says: "Reads routed 10% → 50% → 100% of the read pool, 20 s apart, with the primary at half weight; reads with a token follow read-your-writes"
+verify:
+  settle: 60s
+  checks:
+    - "db.repl_lag < 1"
+  scale_with_traffic: true
+  target: "db.primary_cpu_ratio"
+  expect: "db.primary_cpu_ratio * (1 - db.read_share * (1 - reads.token_share) * 2 / 3)"
+rollback:
+  - name: route-back
+    action: config.set
+    params: {read_routing: {replica_pct: 0, primary_weight: 0, replicas: []}}
+    wait_for: config_converged
+    timeout: 60s
+  - name: stop-replica
+    action: node.run
+    params: {node: node-04, script: pg-replica-remove}
+    timeout: 60s
+  # An abandoned slot keeps WAL on the primary until its disk fills.
+  - name: drop-slot
+    action: sql.primary
+    params: {statement: drop_slot, slot: replica_1}
+    timeout: 30s
+  - name: release
+    action: nodes.release
+    params: {nodes: [node-04]}
+    timeout: 60s
+effects:
+  replicas: 1
+  db_cores: 3.0
+why: >-
+  Reads take {{pct .db.read_share}} of database time, and only {{pct .reads.repeat_ratio}} of listing and product
+  views repeat one from the last minute, so a cache would catch few of them. A replica can serve any of them.
+rejected: "A read replica lost: {{.reason}}."

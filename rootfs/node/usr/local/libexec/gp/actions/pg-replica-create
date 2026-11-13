@@ -1,0 +1,29 @@
+#!/bin/bash
+# Make this node a streaming read replica of PRIMARY using physical slot SLOT, under the same
+# caps as the primary (db.medium: 1.5 cores, 1.5 GiB). Idempotent: an existing, streaming
+# replica on the same slot is left alone.
+set -euo pipefail
+primary="$1" slot="$2"
+data=/var/lib/gp/pg-replica
+if systemctl is-active -q gp-pg-replica.service && [ -f "$data/standby.signal" ] \
+   && grep -q "primary_slot_name = '$slot'" "$data/postgresql.auto.conf"; then
+  exit 0
+fi
+systemctl stop gp-pg-replica.service 2>/dev/null || true
+rm -rf "$data"
+install -d -o postgres -g postgres -m 0700 "$data"
+# The password lives in the postgres user's .pgpass, written when the image was built.
+runuser -u postgres -- /usr/lib/postgresql/18/bin/pg_basebackup \
+  -h "$primary" -U replicator -D "$data" -R -X stream -S "$slot" -c fast --no-password
+cat >>"$data/postgresql.auto.conf" <<CONF
+hot_standby = on
+hot_standby_feedback = on
+cluster_name = '$slot'
+CONF
+systemctl enable --now gp-pg-replica.service
+for _ in $(seq 60); do
+  runuser -u postgres -- /usr/lib/postgresql/18/bin/pg_isready -q -p 5432 -h 127.0.0.1 && exit 0
+  sleep 1
+done
+echo "replica did not accept connections within 60 s" >&2
+exit 1

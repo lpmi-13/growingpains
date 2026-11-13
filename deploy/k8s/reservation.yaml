@@ -1,0 +1,18 @@
+# A database instance runs under systemd on its node. This pause pod requests the same CPU and
+# memory, so the Kubernetes scheduler accounts for it and packs no API pods on top.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reserve-{{ .Node }}
+  namespace: shop
+  labels: {app: reservation, growing-pains/node: "{{ .Node }}"}
+spec:
+  nodeSelector: {kubernetes.io/hostname: "{{ .Node }}"}
+  tolerations: [{key: growing-pains/data, operator: Exists, effect: NoSchedule}]
+  containers:
+    - name: reserve
+      image: {{ .PauseImage }}
+      imagePullPolicy: Never
+      resources:
+        requests: {cpu: "{{ .CPU }}", memory: "{{ .Memory }}"}
+        limits: {cpu: "{{ .CPU }}", memory: "{{ .Memory }}"}

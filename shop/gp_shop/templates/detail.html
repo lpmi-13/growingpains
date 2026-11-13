@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% from "macros.html" import card %}
+{% block title %}{{ product.title }}{% endblock %}
+{% block main %}
+<h1>{{ product.title }}</h1>
+{% if product.image %}<img src="{{ product.image }}" alt="" style="max-width:320px">{% endif %}
+<p><b>{{ product.price }}</b> {{ summary.stars }} ({{ summary.count }} reviews, {{ '%.1f'|format(summary.rating) }} average)</p>
+<p>{{ product.description }}</p>
+<h3>Options</h3>
+<ul>{% for v in variants %}<li>{% for k, val in v.options.items() %}{{ k }}: {{ val }} {% endfor %}— {{ v.price }} ({{ v.stock }} left)</li>{% endfor %}</ul>
+<h3>Reviews</h3>
+<ul>{% for r in reviews %}<li>{{ r.stars }} {{ r.body }} <small>{{ r.at[:10] }}</small></li>{% endfor %}</ul>
+<h3>You might also like</h3>
+<div class="grid">{% for c in related %}{{ card(c) }}{% endfor %}</div>
+{% endblock %}

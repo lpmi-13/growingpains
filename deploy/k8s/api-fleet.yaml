@@ -1,0 +1,103 @@
+# The API fleet: Move 1 applies it; the pooler move rolls it onto a new connection string.
+# Rendered by the architect with Go templates. Images are preloaded on every node, so pods start
+# without a registry pull.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: shop
+  labels: {app: api, growing-pains/move: autoscaled-fleet}
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels: {app: api}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  template:
+    metadata:
+      labels: {app: api}
+    spec:
+      nodeSelector: {growing-pains/role: compute}
+      # Required spread, so both compute nodes always serve. Break Team found a preferred
+      # spread put both replicas on one node.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app: api}
+          matchLabelKeys: [pod-template-hash]
+          nodeTaintsPolicy: Honor
+      terminationGracePeriodSeconds: 40
+      enableServiceLinks: false
+      containers:
+        - name: api
+          image: {{ .ShopImage }}
+          imagePullPolicy: Never
+          ports: [{containerPort: 8000, name: http}]
+          env:
+            - {name: GP_DATABASE_URL, value: "{{ .DatabaseURL }}"}
+            - {name: GP_CONFIG_URL, value: "{{ .ConfigURL }}"}
+            - {name: GP_INSTANCE, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          resources:
+            requests: {cpu: 600m, memory: 150Mi}
+            limits: {cpu: "1", memory: 300Mi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 6
+          lifecycle:
+            # nginx re-resolves the headless Service every second; the sleep lets it stop
+            # sending here before uvicorn stops accepting.
+            preStop:
+              exec: {command: ["sleep", "10"]}
+---
+# Headless, so nginx resolves pod IPs and balances across them with keepalive. A NodePort or
+# ClusterIP would pin each kept-alive connection to one pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: shop
+spec:
+  clusterIP: None
+  selector: {app: api}
+  ports: [{port: 8000, targetPort: http, name: http}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: shop
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: api}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: shop
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: api}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies: [{type: Percent, value: 100, periodSeconds: 15}]
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{type: Pods, value: 1, periodSeconds: 60}]

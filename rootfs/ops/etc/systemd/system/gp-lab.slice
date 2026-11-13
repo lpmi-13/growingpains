@@ -1,0 +1,5 @@
+# The crowd and the prober: the outside world, capped so load generation cannot starve
+# monitoring and decisions on the same VM.
+[Slice]
+CPUQuota=75%
+MemoryMax=512M

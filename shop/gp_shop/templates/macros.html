@@ -1,0 +1,14 @@
+{% macro card(c, snippet=None) -%}
+<div class="card">
+  <a href="/products/{{ c.id }}">
+    {%- if c.thumbnail %}<img src="{{ c.thumbnail }}" alt="" loading="lazy">{% else %}<div class="ph"></div>{% endif -%}
+    <div>{{ c.title }}</div>
+  </a>
+  <div>
+    {%- for b in c.badges %}<span class="badge">{{ b }}</span>{% endfor -%}
+    <b>{{ c.price }}</b> <span title="{{ '%.2f'|format(c.rating) }} out of 5">{{ c.stars }}</span>
+    <small>({{ c.reviews }} review{{ 's' if c.reviews != 1 }})</small>
+  </div>
+  {%- if snippet %}<small>{{ snippet }}…</small>{% endif %}
+</div>
+{%- endmacro %}

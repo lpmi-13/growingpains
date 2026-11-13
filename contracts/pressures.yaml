@@ -1,0 +1,39 @@
+# Pressures: kinds of strain. Each arms when its condition holds for its sustain window, and
+# clears when its disarm condition has held for 15 s (hysteresis, so it does not flap). The
+# architect triggers on saturation and queueing, which lead latency, so a move can finish
+# before the SLO is breached.
+- name: api-compute
+  family: volume
+  priority: 1
+  # The fleet takes about two minutes to become useful, and traffic can double in that time,
+  # so the pressure also arms when CPU is forecast to reach 80% two minutes ahead.
+  arm: "api.cpu_ratio >= 0.75 || api.queue_time_p95 >= 0.025 || ahead.api.cpu_ratio >= 0.8"
+  disarm: "api.cpu_ratio < 0.6 && api.queue_time_p95 < 0.010"
+  sustain: 30s
+  lead: 2m
+  says: >-
+    The API is at {{pct .api.cpu_ratio}} of its CPU ceiling, and requests wait {{ms .api.queue_time_p95}}
+    (p95) before it starts on them. Traffic is {{rps .traffic.rate}}.
+- name: db-read
+  family: read-pattern
+  priority: 2
+  # Reads dominate, and either the primary is hot, or reads use most of the combined capacity of
+  # every instance, or the busiest instance is close to its limit. A replica takes about two
+  # minutes to serve, so the primary's forecast counts too.
+  arm: >-
+    db.read_share >= 0.6 && (db.primary_cpu_ratio >= 0.70 || db.read_cpu_ratio >= 0.70 || db.cpu_ratio >= 0.9
+    || ahead.db.primary_cpu_ratio >= 0.85 || ahead.db.read_cpu_ratio >= 0.85)
+  disarm: "db.primary_cpu_ratio < 0.55 && db.read_cpu_ratio < 0.55 && db.cpu_ratio < 0.75"
+  sustain: 45s
+  lead: 2m
+  says: >-
+    The busiest database is at {{pct .db.cpu_ratio}} of its CPU limit, and reads take {{pct .db.read_share}}
+    of its time. Listing pages are {{pct .traffic.listing_share}} of requests.
+- name: db-connections
+  family: clients-connections
+  priority: 3
+  arm: "db.connections_ratio >= 0.7"
+  disarm: "db.connections_ratio < 0.5"
+  sustain: 30s
+  says: >-
+    The primary has {{pct .db.connections_ratio}} of its connections in use, across {{int .api.instances}} API instances.

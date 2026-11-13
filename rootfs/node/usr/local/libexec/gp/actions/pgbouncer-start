@@ -1,0 +1,5 @@
+#!/bin/bash
+# PgBouncer in transaction mode with max_prepared_statements, so psycopg's prepared statements
+# keep working through it.
+set -euo pipefail
+systemctl enable --now pgbouncer.service
