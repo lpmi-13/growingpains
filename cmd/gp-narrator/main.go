@@ -16,6 +16,8 @@ import (
 	"github.com/lpmi-13/growingpains/internal/architect"
 	"github.com/lpmi-13/growingpains/internal/archsvc"
 	"github.com/lpmi-13/growingpains/internal/narrator"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -41,7 +43,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go n.Run(ctx, 2*time.Second)
-	server := &http.Server{Addr: *listen, Handler: n.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(narrator.NewMetrics(n))
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	mux.Handle("/", n.Handler())
+	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { <-ctx.Done(); server.Close() }()
 	log.Info("narrator ready", "listen", *listen)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

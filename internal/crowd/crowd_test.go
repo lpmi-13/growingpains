@@ -2,11 +2,14 @@ package crowd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,6 +77,41 @@ func newEngine(t *testing.T, base, story string) (*Engine, *Metrics) {
 	m.RegisterRun(reg)
 	ix := catalog.Build(catalog.Spec{Sellers: 50, Products: 3000, Users: 1000})
 	return New(Config{Base: base, MaxInflight: 500, Sellers: 5, Storyline: story}, ix, m, slog.Default()), m
+}
+
+func TestCompletedRunRemainsFinishedAfterRestart(t *testing.T) {
+	shop := &fakeShop{versions: map[int64]int{}}
+	srv := httptest.NewServer(shop)
+	defer srv.Close()
+	e, m := newEngine(t, srv.URL, "word-gets-out")
+	e.cfg.StateFile = filepath.Join(t.TempDir(), "run.json")
+	data, err := json.Marshal(savedRun{Seed: 19, StartedAt: time.Now().Add(-30 * time.Minute), Storyline: e.cfg.Storyline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.cfg.StateFile, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+	deadline := time.Now().Add(time.Second)
+	for !e.Status().Started && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if st := e.Status(); !st.Started || st.Seed != 19 || st.Chapter != "Finished" || st.Rate != 0 {
+		t.Fatalf("resumed completed run: %+v", st)
+	}
+	if err := e.Start(ctx, 20); err != errAlreadyStarted {
+		t.Fatalf("starting after completion: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	shop.mu.Lock()
+	requests := shop.requests
+	shop.mu.Unlock()
+	if requests != 0 || testutil.ToFloat64(m.StoryRate) != 0 {
+		t.Fatalf("completed run sent %d requests with target rate %v", requests, testutil.ToFloat64(m.StoryRate))
+	}
 }
 
 func TestOpenLoopRateMatchesTheStoryline(t *testing.T) {

@@ -112,6 +112,9 @@ func (a *sellerActor) run(ctx context.Context) {
 	next = next.Add(gap(next))
 	chapter := a.p.state(next).Chapter
 	for {
+		if !a.p.start.IsZero() && !next.Before(a.p.start.Add(a.p.story.Duration())) {
+			return
+		}
 		wait := time.Until(next)
 		if wait > 0 {
 			select {
@@ -121,6 +124,9 @@ func (a *sellerActor) run(ctx context.Context) {
 			}
 		}
 		if ctx.Err() != nil {
+			return
+		}
+		if !a.p.start.IsZero() && !time.Now().Before(a.p.start.Add(a.p.story.Duration())) {
 			return
 		}
 		a.e.m.Sessions.WithLabelValues("seller", "scheduled").Inc()

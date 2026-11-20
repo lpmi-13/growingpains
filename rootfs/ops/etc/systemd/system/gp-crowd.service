@@ -3,7 +3,7 @@ Description=Growing Pains crowd
 After=network-online.target
 [Service]
 Slice=gp-lab.slice
-ExecStart=/usr/local/bin/gp-crowd -listen=127.0.0.1:9101 -shop=http://node-01 -state=/var/lib/gp-crowd/run.json -autostart=3m
+ExecStart=/usr/local/bin/gp-crowd -listen=127.0.0.1:9101 -shop=http://node-01 -state=/var/lib/gp-crowd/run.json -autostart=3m -seed=1003
 StateDirectory=gp-crowd
 DynamicUser=yes
 Restart=always

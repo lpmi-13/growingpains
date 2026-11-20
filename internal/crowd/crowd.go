@@ -75,16 +75,13 @@ type savedRun struct {
 	Storyline string    `json:"storyline"`
 }
 
-// Run plays genesis traffic, or resumes a run recorded in the state file, until ctx ends.
+// Run plays genesis traffic, or resumes the recorded run, until ctx ends.
 func (e *Engine) Run(ctx context.Context) {
 	if saved, ok := e.loadState(); ok {
-		story := storyline.ByName(saved.Storyline, saved.Seed, e.ix)
-		if time.Since(saved.StartedAt) < story.Duration()+10*time.Minute {
-			e.log.Info("resuming run", "seed", saved.Seed, "elapsed", time.Since(saved.StartedAt).Round(time.Second))
-			e.begin(ctx, saved.Seed, saved.StartedAt)
-			<-ctx.Done()
-			return
-		}
+		e.log.Info("resuming run", "seed", saved.Seed, "elapsed", time.Since(saved.StartedAt).Round(time.Second))
+		e.begin(ctx, saved.Seed, saved.StartedAt)
+		<-ctx.Done()
+		return
 	}
 	e.begin(ctx, 0, time.Time{})
 	<-ctx.Done()
@@ -128,8 +125,8 @@ func (e *Engine) loadState() (savedRun, bool) {
 }
 
 func (e *Engine) begin(parent context.Context, seed uint64, start time.Time) {
-	ctx, cancel := context.WithCancel(parent)
 	story := storyline.ByName(e.cfg.Storyline, seed, e.ix)
+	ctx, cancel := context.WithCancel(parent)
 	p := &phase{seed: seed, story: story, start: start, cancel: cancel, ix: e.ix, lastCh: -2,
 		picker: traffic.NewPicker(e.ix, story, seed)}
 	e.mu.Lock()
@@ -184,6 +181,9 @@ func (e *Engine) Status() Status {
 	s := Status{Chapter: st.Name, Rate: st.Rate, Storyline: p.story.Name, Duration: p.story.Duration().Seconds()}
 	if !p.start.IsZero() {
 		s.Started, s.Seed, s.StartedAt, s.Elapsed = true, p.seed, p.start, now.Sub(p.start).Seconds()
+		if now.Sub(p.start) >= p.story.Duration() {
+			s.Chapter, s.Rate = "Finished", 0
+		}
 	}
 	return s
 }
@@ -201,7 +201,24 @@ func (e *Engine) Story() *storyline.Storyline {
 func (e *Engine) observe(ctx context.Context, p *phase) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	defer func() {
+		if p.start.IsZero() || time.Now().Before(p.start.Add(p.story.Duration())) {
+			return
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.current == p {
+			e.m.StoryRate.Set(0)
+			e.m.StoryChapter.Reset()
+			e.m.StoryChapter.WithLabelValues(itoa(len(p.story.Chapters)+1), "Finished").Set(1)
+			e.m.RunElapsed.Set(p.story.Duration().Seconds())
+			e.log.Info("run completed", "seed", p.seed)
+		}
+	}()
 	for {
+		if !p.start.IsZero() && !time.Now().Before(p.start.Add(p.story.Duration())) {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -251,6 +268,9 @@ func (e *Engine) arrivals(ctx context.Context, p *phase, name string, rate func(
 	for idx := uint64(0); ; idx++ {
 		lam := math.Max(rate(p.state(next)), 0.01)
 		next = next.Add(time.Duration(r.ExpFloat64() / lam * float64(time.Second)))
+		if !p.start.IsZero() && !next.Before(p.start.Add(p.story.Duration())) {
+			return
+		}
 		if wait := time.Until(next); wait > 0 {
 			timer.Reset(wait)
 			select {
@@ -260,6 +280,9 @@ func (e *Engine) arrivals(ctx context.Context, p *phase, name string, rate func(
 			case <-timer.C:
 			}
 		} else if ctx.Err() != nil {
+			return
+		}
+		if !p.start.IsZero() && !time.Now().Before(p.start.Add(p.story.Duration())) {
 			return
 		}
 		e.m.ScheduleLag.Observe(math.Max(0, -time.Until(next).Seconds()))

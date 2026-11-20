@@ -64,6 +64,7 @@ type Run struct {
 	ActionDone   bool           `json:"action_done"`
 	StepStarted  time.Time      `json:"step_started"`
 	ActionAt     time.Time      `json:"action_at"`
+	CheckSince   time.Time      `json:"check_since"` // when the step's check began to hold without a break
 	PausedSince  time.Time      `json:"paused_since"`
 	Started      time.Time      `json:"started"`
 	StepsEnded   time.Time      `json:"steps_ended"`
@@ -426,7 +427,7 @@ func (a *Architect) stepOnce(ctx context.Context, r *Run, v signals.Values, env 
 		}
 		a.record(Event{Kind: "step", Move: r.Move, Step: s.Name, Text: s.Says, Signals: v, Data: map[string]any{"phase": s.Phase}})
 		r.Step++
-		r.ActionDone, r.StepStarted = false, now
+		r.ActionDone, r.StepStarted = false, a.Clock.Now()
 		if r.Step == len(c.Steps) {
 			r.Phase, r.StepsEnded = "verifying", now
 			a.st.Model.Apply(c, r.Placed)
@@ -451,7 +452,7 @@ func (a *Architect) stepOnce(ctx context.Context, r *Run, v signals.Values, env 
 		r.Verdict = "verified"
 		if !ok {
 			r.Verdict = "verification failed: " + why
-		} else if r.Predicted > 0 && c.Verify.Target != "" && r.Measured < r.Predicted/2 {
+		} else if r.Predicted > 0 && c.Verify.Target != "" && !c.Verify.ReportOnly && r.Measured < r.Predicted/2 {
 			r.Verdict = fmt.Sprintf("under-delivered: measured relief %.2f is under half the predicted %.2f", r.Measured, r.Predicted)
 		}
 		if r.Verdict != "verified" {
@@ -467,12 +468,12 @@ func (a *Architect) stepOnce(ctx context.Context, r *Run, v signals.Values, env 
 		done, failed := a.runStep(ctx, r, s, env, now)
 		if failed != "" {
 			a.Log.Error("rollback step failing", "move", r.Move, "step", s.Name, "why", failed)
-			r.ActionDone, r.StepStarted = false, now
+			r.ActionDone, r.StepStarted = false, a.Clock.Now()
 			return
 		}
 		if done {
 			r.Step++
-			r.ActionDone, r.StepStarted = false, now
+			r.ActionDone, r.StepStarted = false, a.Clock.Now()
 		}
 	}
 }
@@ -490,7 +491,9 @@ func (a *Architect) runStep(ctx context.Context, r *Run, s Step, env Env, now ti
 				return false, ""
 			}
 		}
-		r.ActionDone, r.ActionAt = true, now
+		// The clock, not the tick's `now`: an action can block for seconds (an SSH script), and
+		// a hold must count from when it finished.
+		r.ActionDone, r.ActionAt, r.CheckSince = true, a.Clock.Now(), time.Time{}
 	}
 	ready := true
 	detail := ""
@@ -501,14 +504,24 @@ func (a *Architect) runStep(ctx context.Context, r *Run, s Step, env Env, now ti
 			detail = err.Error()
 		}
 	}
+	holdFrom := r.ActionAt
 	if ready && s.Check != "" {
+		// Signals read before the step began say nothing about it, and the check must hold for
+		// the whole hold, not only at its end.
 		ok, err := Bool(s.Check, env)
-		ready = ok && err == nil
-		if !ready {
+		ready = ok && err == nil && !now.Before(r.StepStarted)
+		switch {
+		case !ready:
+			r.CheckSince = time.Time{}
 			detail = "waiting for " + s.Check
+		case r.CheckSince.IsZero():
+			r.CheckSince = now
+		}
+		if r.CheckSince.After(holdFrom) {
+			holdFrom = r.CheckSince
 		}
 	}
-	if ready && now.Sub(r.ActionAt) >= s.Hold.D() {
+	if ready && now.Sub(holdFrom) >= s.Hold.D() {
 		return true, ""
 	}
 	if s.Timeout.D() > 0 && now.Sub(r.StepStarted) >= s.Timeout.D() {
@@ -522,7 +535,7 @@ func (a *Architect) runStep(ctx context.Context, r *Run, s Step, env Env, now ti
 
 func (a *Architect) beginRollback(r *Run, why string, now time.Time, v signals.Values) {
 	r.RollbackFrom = why
-	r.Phase, r.Step, r.ActionDone, r.StepStarted = "rolling_back", 0, false, now
+	r.Phase, r.Step, r.ActionDone, r.StepStarted = "rolling_back", 0, false, a.Clock.Now()
 	r.Lines = append(r.Lines, "Rolled back: "+why)
 	a.record(Event{Kind: "rolling_back", Move: r.Move, Text: why, Signals: v})
 }
@@ -539,7 +552,13 @@ func (a *Architect) finish(r *Run, phase string, now time.Time, v signals.Values
 			"verdict": r.Verdict, "steps_ended": r.StepsEnded, "lines": r.Lines}})
 	a.st.History = append(a.st.History, r)
 	a.st.Active = nil
-	a.st.Cooldown = now.Add(a.Cfg.Cooldown)
+	cooldown := a.Cfg.Cooldown
+	if phase == "completed" {
+		if c := a.Catalog.Move(r.Move); c != nil && c.CooldownAfter.D() > 0 {
+			cooldown = c.CooldownAfter.D()
+		}
+	}
+	a.st.Cooldown = now.Add(cooldown)
 	// A completed move's pressure is re-measured from scratch.
 	if p := a.st.Pressures[r.Decision.Pressure]; p != nil {
 		*p = pressureState{}

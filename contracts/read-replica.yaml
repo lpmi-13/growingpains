@@ -1,6 +1,10 @@
 name: read-replica
 title: Add a read replica
 class: architecture
+budget_protective: true
+# Cache eligibility is evaluated from sustained repeat traffic; a full minute after
+# replica verification can miss the rising-load window before its quota buffer lands.
+cooldown_after: 15s
 family: read-pattern
 answers: db-read
 # Reads are spread across the catalog (a cache would catch few of them), and no single
@@ -25,6 +29,15 @@ steps:
     wait_for: nodes_ready
     timeout: 60s
     says: "Acquired node-04 and reserved 1.5 cores and 1.5 GiB for the replica"
+  # The databases already reserve 1.5 cores each in the ledger. Unlock that reservation
+  # before new read traffic reaches the replica: a 0.65-core quota made search time out
+  # during the routing transition even though both machines had spare physical CPU.
+  - name: primary-headroom
+    phase: expand
+    action: node.run
+    params: {node: node-01, script: pg-cap, args: ["150%"]}
+    timeout: 30s
+    says: "Raised the primary's CPU ceiling to its reserved 1.5 cores before the read migration"
   - name: replication-slot
     phase: expand
     action: sql.primary
@@ -35,8 +48,15 @@ steps:
     action: node.run
     params: {node: node-04, script: pg-replica-create, args: [node-01, replica_1]}
     wait_for: replica_streaming
-    timeout: 120s
+    # The backup is rate-capped at 6 MB/s (see pg-replica-create), and the database grows.
+    timeout: 180s
     says: "Base backup and streaming with a physical slot"
+  - name: replica-headroom
+    phase: expand
+    action: node.run
+    params: {node: node-04, script: pg-replica-cap, args: ["150%"]}
+    timeout: 30s
+    says: "Raised the replica's CPU ceiling to its reserved 1.5 cores before routing reads"
   - name: catch-up
     phase: expand
     check: "db.repl_lag < 0.2"
@@ -80,6 +100,14 @@ rollback:
     params: {read_routing: {replica_pct: 0, primary_weight: 0, replicas: []}}
     wait_for: config_converged
     timeout: 60s
+  - name: primary-cap-back
+    action: node.run
+    params: {node: node-01, script: pg-cap, args: ["65%"]}
+    timeout: 30s
+  - name: replica-cap-back
+    action: node.run
+    params: {node: node-04, script: pg-replica-cap, args: ["65%"]}
+    timeout: 30s
   - name: stop-replica
     action: node.run
     params: {node: node-04, script: pg-replica-remove}

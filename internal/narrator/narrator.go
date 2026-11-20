@@ -38,14 +38,19 @@ type Note struct {
 
 // Record is a decision record in the style of an architecture decision record.
 type Record struct {
-	ID      int       `json:"id"`
-	Move    string    `json:"move"`
-	Title   string    `json:"title"`
-	Start   float64   `json:"start"`
-	End     float64   `json:"end"`
-	Text    string    `json:"text"`
-	Done    bool      `json:"done"`
-	Updated time.Time `json:"updated"`
+	ID        int       `json:"id"`
+	Move      string    `json:"move"`
+	Title     string    `json:"title"`
+	Start     float64   `json:"start"`
+	End       float64   `json:"end"`
+	Text      string    `json:"text"`
+	Done      bool      `json:"done"`
+	Outcome   string    `json:"outcome,omitempty"`
+	Verdict   string    `json:"verdict,omitempty"`
+	Requests  float64   `json:"change_requests,omitempty"`
+	Errors    float64   `json:"change_errors,omitempty"`
+	ChangeEnd float64   `json:"change_end,omitempty"`
+	Updated   time.Time `json:"updated"`
 }
 
 // Sources are where the narrator reads from.
@@ -53,6 +58,13 @@ type Sources struct {
 	Architect  string // the architect's API
 	Crowd      string // the crowd's control API, for the run clock and Start
 	Prometheus string // for the error count during each move's change window
+}
+
+// MapPlacement is capacity being added by an active move before it enters the model.
+type MapPlacement struct {
+	Node      string `json:"node"`
+	Component string `json:"component"`
+	Kind      string `json:"kind"`
 }
 
 // Annotator writes narration annotations to Grafana.
@@ -68,16 +80,21 @@ type Narrator struct {
 	log  *slog.Logger
 	http *http.Client
 
-	mu        sync.Mutex
-	notes     []Note
-	records   []*Record
-	byMove    map[string]*Record
-	decisions map[string]architect.Event
-	lastEvent int
-	history   []sample // the last few minutes of signals
-	lastTraf  time.Time
-	runStart  time.Time
-	subs      map[chan []byte]bool
+	mu         sync.Mutex
+	notes      []Note
+	records    []*Record
+	byMove     map[string]*Record
+	decisions  map[string]architect.Event
+	lastEvent  int
+	history    []sample // the last few minutes of signals
+	lastTraf   time.Time
+	runStart   time.Time
+	seed       uint64
+	model      *architect.Model
+	activeMove string
+	migrating  []MapPlacement
+	report     *RunReport
+	subs       map[chan []byte]bool
 }
 
 type sample struct {
@@ -128,6 +145,7 @@ type Status struct {
 	Elapsed   float64   `json:"elapsed_seconds"`
 	Duration  float64   `json:"duration_seconds"`
 	Seed      uint64    `json:"seed"`
+	Storyline string    `json:"storyline"`
 }
 
 func (n *Narrator) tick(ctx context.Context) {
@@ -135,10 +153,18 @@ func (n *Narrator) tick(ctx context.Context) {
 	if err := n.getJSON(ctx, n.src.Crowd+"/status", &st); err == nil && st.Started {
 		n.mu.Lock()
 		n.runStart = st.StartedAt
+		n.seed = st.Seed
 		n.mu.Unlock()
 	}
 	var state struct {
 		Signals map[string]float64 `json:"signals"`
+		State   struct {
+			Model  *architect.Model `json:"model"`
+			Active *struct {
+				Move   string               `json:"move"`
+				Placed []architect.Resolved `json:"placed"`
+			} `json:"active"`
+		} `json:"state"`
 	}
 	if err := n.getJSON(ctx, n.src.Architect+"/api/state", &state); err != nil {
 		n.log.Warn("architect state", "err", err)
@@ -146,6 +172,15 @@ func (n *Narrator) tick(ctx context.Context) {
 	}
 	now := time.Now()
 	n.mu.Lock()
+	n.model = state.State.Model
+	n.activeMove = ""
+	n.migrating = nil
+	if state.State.Active != nil {
+		n.activeMove = state.State.Active.Move
+		for _, p := range state.State.Active.Placed {
+			n.migrating = append(n.migrating, MapPlacement{Node: p.Node, Component: p.Component, Kind: p.Kind})
+		}
+	}
 	n.history = append(n.history, sample{at: now, v: state.Signals})
 	for len(n.history) > 0 && now.Sub(n.history[0].at) > 3*time.Minute {
 		n.history = n.history[1:]
@@ -162,6 +197,9 @@ func (n *Narrator) tick(ctx context.Context) {
 		n.onEvent(ctx, e)
 	}
 	n.trafficNote(now, state.Signals)
+	if st.Started && st.Duration > 0 && st.Elapsed >= st.Duration+25 {
+		n.finishReport(ctx, st)
+	}
 	n.broadcast()
 }
 
@@ -441,9 +479,17 @@ func (n *Narrator) outcome(ctx context.Context, e architect.Event) {
 	}
 	n.add(Note{At: e.At, Kind: "outcome", Move: e.Move, Text: text, Numbers: nums})
 	end := n.runT(e.At)
+	changeEnd := n.runT(windowEnd)
 	text = n.recordText(rec, d, &e, errs, reqs)
 	n.mu.Lock()
 	rec.End, rec.Done, rec.Text, rec.Updated = end, true, text, time.Now()
+	rec.Outcome = e.Kind
+	rec.Verdict = fmt.Sprint(e.Data["verdict"])
+	rec.Requests, rec.Errors = reqs, errs
+	rec.ChangeEnd = changeEnd
+	if rec.Verdict == "<nil>" {
+		rec.Verdict = e.Text
+	}
 	n.mu.Unlock()
 }
 
@@ -487,6 +533,21 @@ var trafficThresholds = map[string]float64{
 
 func (n *Narrator) trafficNote(now time.Time, v map[string]float64) {
 	n.mu.Lock()
+	rate, measured := v["traffic.rate"]
+	if !measured {
+		n.mu.Unlock()
+		return
+	}
+	if rate == 0 {
+		// A missing scrape can briefly produce zero between healthy samples. Wait for a
+		// sustained zero before calling it a traffic collapse in the public narration.
+		for _, s := range n.history {
+			if now.Sub(s.at) <= 30*time.Second && s.v["traffic.rate"] > 0 {
+				n.mu.Unlock()
+				return
+			}
+		}
+	}
 	if len(n.history) == 0 || now.Sub(n.history[0].at) < 2*time.Minute-10*time.Second {
 		n.mu.Unlock()
 		return

@@ -4,7 +4,9 @@ class: tuning
 family: read-pattern
 answers: db-read
 preconditions: []
-# Half a core more for the primary, on its own node.
+# Half a core more for the primary, on its own node: 1.5 → 2.0 of the storyline's cores. The
+# ledger counts db.medium units (1.5 cores, as the plan sizes it); on the playground one unit is
+# a 65% quota, so 2.0 of them is 87% (internal/twin.PlaygroundDBCores, docs/plan-deviations.md).
 footprint:
   - {node: node-01, component: pg-primary, kind: postgres-primary, cpu: 0.5, memory_mib: 0}
 relief: "0.5"
@@ -14,7 +16,7 @@ steps:
   - name: raise-quota
     phase: expand
     action: node.run
-    params: {node: node-01, script: pg-cap, args: ["200%"]}
+    params: {node: node-01, script: pg-cap, args: ["87%"]}
     timeout: 30s
     says: "Raised the primary's CPU quota live with systemctl set-property. A cloud database usually needs a restart or failover here."
 verify:

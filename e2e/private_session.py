@@ -38,6 +38,10 @@ TARGETS = {"ops-01": "ops", "node-01": "node", "node-02": "node", "node-03": "no
 WHITEOUT = ".wh."
 OPAQUE = ".wh..wh..opq"
 SKIPPED_TOP_LEVEL = ("tmp", "run", "proc", "sys", "dev")
+# Prometheus stores the run's judge history here. The ops image marks this directory opaque;
+# deleting it during an overlay update would erase completed-run evidence and leave the narrator
+# with an incomplete report after reboot. Tar extraction preserves existing child files.
+PRESERVE_RUNTIME = ("var/lib/prometheus",)
 
 
 def run(*args, stdin=None, timeout=1800):
@@ -45,6 +49,9 @@ def run(*args, stdin=None, timeout=1800):
 
 
 def layer_count(image):
+    # A BuildKit build keeps its base in the build cache, not the image store, so pull it.
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0:
+        run("docker", "pull", "-q", image)
     return int(run("docker", "inspect", "--format", "{{len .RootFS.Layers}}", image).strip())
 
 
@@ -104,8 +111,17 @@ def apply_overlay(play, vm, archive, removed):
     built = time.monotonic()
     run("labctl", "cp", "--machine", vm, "--user", "root", str(archive), f"{play}:/var/tmp/overlay.tar.gz")
     copied = time.monotonic()
-    commands = []
+    # The node image carries the seeded database. Unpacked over a cluster that has run, its old
+    # pg_control and files mix with newer WAL and the cluster cannot start ("could not locate a
+    # valid checkpoint record"). Lay the image's cluster down whole: the first-boot database.
+    commands = [
+        "systemctl stop postgresql@18-main gp-pg-replica 2>/dev/null",
+        "[ -d /var/lib/postgresql/18/main ] && rm -rf /var/lib/postgresql/18/main",
+        "true",
+    ]
     for path, opaque in removed:
+        if any(path == keep or path.startswith(keep + "/") for keep in PRESERVE_RUNTIME):
+            continue
         quoted = "'/" + path.replace("'", "'\\''") + "'"
         commands.append(f"rm -rf {quoted}/* {quoted}/.[!.]* 2>/dev/null" if opaque else f"rm -rf {quoted}")
     commands.append(
@@ -121,6 +137,35 @@ def apply_overlay(play, vm, archive, removed):
         print(f"    {vm} extraction: {output[-600:]}", flush=True)
     print(f"    {vm}: {size:.0f} MiB overlay, copied in {copied - built:.0f}s, applied in {time.monotonic() - copied:.0f}s", flush=True)
 
+
+
+def wait_cluster_ready(play, timeout=300):
+    """Wait for kubectl on the rebooted ops VM and all five nodes to be ready."""
+    deadline = time.monotonic() + timeout
+    expected = set(TARGETS)
+    last = "kubectl unavailable"
+    while time.monotonic() < deadline:
+        try:
+            result = subprocess.run(
+                ["labctl", "ssh", play, "--machine", "ops-01", "--user", "root", "--",
+                 "kubectl", "get", "nodes", "-o", "json"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                nodes = json.loads(result.stdout)["items"]
+                ready = {node["metadata"]["name"] for node in nodes
+                         if any(c["type"] == "Ready" and c["status"] == "True"
+                                for c in node["status"].get("conditions", []))}
+                if expected <= ready:
+                    print(f"    cluster ready: {', '.join(sorted(expected))}", flush=True)
+                    return
+                last = f"ready nodes: {', '.join(sorted(ready)) or 'none'}"
+            else:
+                last = result.stderr.strip()[-300:] or "kubectl unavailable"
+        except (subprocess.TimeoutExpired, ValueError, KeyError) as error:
+            last = str(error)[-300:]
+        time.sleep(5)
+    raise RuntimeError(f"cluster did not become ready within {timeout}s: {last}")
 
 
 def start(free_tier):
@@ -153,6 +198,7 @@ def update(play, vms):
     for vm in vms:
         run("labctl", "playground", "machine", "reboot", play, vm, timeout=300)
     print(f"    rebooted {', '.join(vms)}", flush=True)
+    wait_cluster_ready(play)
 
 
 def main():

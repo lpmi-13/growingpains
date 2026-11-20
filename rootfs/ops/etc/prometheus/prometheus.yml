@@ -38,5 +38,7 @@ scrape_configs:
     static_configs: [{targets: ["127.0.0.1:9103"]}]
   - job_name: architect
     static_configs: [{targets: ["127.0.0.1:7000"]}]
+  - job_name: narrator
+    static_configs: [{targets: ["127.0.0.1:8080"]}]
   - job_name: prometheus
     static_configs: [{targets: ["127.0.0.1:9090"]}]

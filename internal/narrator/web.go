@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/lpmi-13/growingpains/internal/architect"
 )
 
 //go:embed page.html
@@ -17,18 +19,27 @@ var page []byte
 // snapshot is what every viewer receives each tick: one computation, fanned out over SSE, so
 // the page's load does not grow with its audience.
 type snapshot struct {
-	Clock   string   `json:"clock"`
-	Started bool     `json:"started"`
-	Seed    uint64   `json:"seed"`
-	Notes   []Note   `json:"notes"`
-	Records []Record `json:"records"`
+	Clock        string           `json:"clock"`
+	Started      bool             `json:"started"`
+	Seed         uint64           `json:"seed"`
+	Notes        []Note           `json:"notes"`
+	Records      []Record         `json:"records"`
+	Architecture *architect.Model `json:"architecture,omitempty"`
+	ActiveMove   string           `json:"active_move,omitempty"`
+	Migrating    []MapPlacement   `json:"migrating,omitempty"`
+	Report       *RunReport       `json:"report,omitempty"`
 }
 
 func (n *Narrator) snapshot() []byte {
 	n.mu.Lock()
 	start := n.runStart
+	seed := n.seed
+	model := n.model
+	move := n.activeMove
+	migrating := append([]MapPlacement(nil), n.migrating...)
+	report := n.report
 	n.mu.Unlock()
-	s := snapshot{Clock: "genesis", Started: !start.IsZero(), Notes: n.Notes(), Records: n.Records()}
+	s := snapshot{Clock: "genesis", Started: !start.IsZero(), Seed: seed, Notes: n.Notes(), Records: n.Records(), Architecture: model, ActiveMove: move, Migrating: migrating, Report: report}
 	if s.Started {
 		s.Clock = Clock(time.Since(start).Seconds())
 	}
@@ -115,6 +126,17 @@ func (n *Narrator) Handler() http.Handler {
 	mux.HandleFunc("GET /api/records", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(n.Records())
+	})
+	mux.HandleFunc("GET /api/report", func(w http.ResponseWriter, r *http.Request) {
+		n.mu.Lock()
+		report := n.report
+		n.mu.Unlock()
+		if report == nil {
+			http.Error(w, "run report is available after the run", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(report)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	return mux

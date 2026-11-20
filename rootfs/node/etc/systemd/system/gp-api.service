@@ -14,8 +14,12 @@ WorkingDirectory=/opt/shop
 ExecStart=/usr/local/bin/uvicorn gp_shop.app:app --host 0.0.0.0 --port 8000 --loop uvloop --http httptools --no-access-log --timeout-graceful-shutdown 20 --backlog 2048
 User=65534
 Group=65534
-# One core, like an API pod's limit. A 10 ms period throttles a small quota smoothly.
-CPUQuota=100%
+# One capacity unit: what one Python process is worth on the local stack the twin is calibrated
+# on (one core there). A playground vCPU runs the API about 2.4 times faster (1.8 ms of CPU per
+# request against 4.3 ms), so a full core here let genesis absorb the whole first chapter and
+# Move 1 armed late or not at all. See docs/calibration.md. A 10 ms period throttles a small
+# quota smoothly.
+CPUQuota=40%
 CPUQuotaPeriodSec=10ms
 MemoryMax=512M
 Restart=on-failure

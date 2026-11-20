@@ -28,6 +28,23 @@ button:disabled { opacity: .5; cursor: default; }
 main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; padding: 1rem; max-width: 1400px; margin: auto; }
 @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } form { margin-left: 0; } }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .25rem 1rem 1rem; min-width: 0; }
+.architecture { grid-column: 1 / -1; }
+.path { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .9rem; font-weight: 600; }
+.path span { padding: .25rem .55rem; border-radius: 5px; background: var(--bg); border: 1px solid var(--line); }
+.path b { color: var(--muted); font-weight: 400; }
+.nodes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .6rem; }
+@media (max-width: 860px) { .nodes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.node { border: 1px solid var(--line); border-radius: 8px; padding: .6rem; min-height: 7rem; }
+.node.dormant { border-style: dashed; opacity: .65; }
+.node.transitioning { border-color: var(--accent); opacity: 1; }
+.node-title { font-weight: 700; }
+.node-role { font-size: .78rem; color: var(--muted); margin-bottom: .45rem; }
+.component { display: block; border-radius: 5px; border: 1px solid var(--line); background: var(--bg); padding: .25rem .4rem; margin-top: .3rem; font-size: .84rem; }
+.component.migrating { border-color: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
+.component.retired { opacity: .45; text-decoration: line-through; }
+.ghost { color: var(--muted); border-style: dashed; background: transparent; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .component.migrating { animation: none; } }
 h2 { font-size: 1rem; margin: .75rem 0; }
 .note { padding: .55rem 0; border-top: 1px solid var(--line); }
 .note:first-of-type { border-top: 0; }
@@ -52,6 +69,11 @@ pre { font: .8rem/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-
   </form>
 </header>
 <main>
+  <section class="architecture" aria-labelledby="arch-h">
+    <h2 id="arch-h">Living architecture</h2>
+    <div class="path" id="path"><span>Crowd</span><b>→</b><span>nginx</span><b>→</b><span>API</span><b>→</b><span>PostgreSQL</span></div>
+    <div class="nodes" id="nodes"><p class="empty">Waiting for the architect's picture.</p></div>
+  </section>
   <section aria-labelledby="feed-h">
     <h2 id="feed-h">What the traffic made the system do</h2>
     <div id="feed"><p class="empty">Waiting for the first note. Before Start the shop runs at genesis traffic.</p></div>
@@ -59,6 +81,10 @@ pre { font: .8rem/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-
   <section aria-labelledby="records-h">
     <h2 id="records-h">Decision records</h2>
     <div id="records"><p class="empty">No moves yet.</p></div>
+  </section>
+  <section class="architecture" id="report-section" aria-labelledby="report-h" hidden>
+    <h2 id="report-h">Run report</h2>
+    <pre id="report"></pre>
   </section>
 </main>
 <script>
@@ -68,9 +94,59 @@ function clock(s) {
   const m = Math.floor(s / 60), r = Math.floor(s % 60);
   return "t+" + String(m).padStart(2, "0") + ":" + String(r).padStart(2, "0");
 }
+function map(snap) {
+  const model = snap.architecture;
+  if (!model || !model.nodes) return;
+  const components = model.components || [];
+  const migrating = snap.migrating || [];
+  const active = (kind) => components.some((c) => c.kind === kind && c.state !== "retired");
+  const path = ["Crowd", "nginx", active("api-fleet") ? "API fleet" : "API process"];
+  if (active("valkey")) path.push("Valkey cache");
+  path.push("PostgreSQL primary");
+  if (active("postgres-replica")) path.push("read replica");
+  const line = $("path");
+  line.replaceChildren();
+  path.forEach((name, i) => {
+    if (i) { const arrow = document.createElement("b"); arrow.textContent = "→"; line.append(arrow); }
+    const chip = document.createElement("span"); chip.textContent = name; line.append(chip);
+  });
+  const ghosts = {"node-02": "API fleet / cache", "node-03": "API fleet / workers", "node-04": "read replica / search"};
+  const nodes = $("nodes");
+  nodes.replaceChildren(...model.nodes.map((node) => {
+    const card = document.createElement("div");
+    const joining = migrating.filter((p) => p.node === node.name && p.component);
+    card.className = "node" + (node.acquired ? "" : " dormant") + (joining.length ? " transitioning" : "");
+    const title = document.createElement("div"); title.className = "node-title"; title.textContent = node.name;
+    const role = document.createElement("div"); role.className = "node-role";
+    role.textContent = node.acquired ? node.role : "dormant capacity";
+    card.append(title, role);
+    const live = components.filter((c) => c.node === node.name && c.kind !== "agent");
+    live.forEach((c) => {
+      const item = document.createElement("span");
+      item.className = "component " + c.state;
+      item.textContent = c.id.replaceAll("-", " ");
+      card.append(item);
+    });
+    joining.filter((p) => !live.some((c) => c.id === p.component)).forEach((p) => {
+      const item = document.createElement("span"); item.className = "component migrating";
+      item.textContent = p.component.replaceAll("-", " ") + " · joining";
+      card.append(item);
+    });
+    if (!node.acquired && ghosts[node.name]) {
+      const ghost = document.createElement("span"); ghost.className = "component ghost";
+      ghost.textContent = ghosts[node.name]; card.append(ghost);
+    }
+    return card;
+  }));
+}
 function render(snap) {
   $("clock").textContent = snap.clock;
   $("go").disabled = snap.started;
+  map(snap);
+  if (snap.report) {
+    $("report-section").hidden = false;
+    $("report").textContent = snap.report.text;
+  }
   const feed = $("feed");
   if (snap.notes && snap.notes.length) {
     feed.replaceChildren(...snap.notes.slice().reverse().map((n) => {

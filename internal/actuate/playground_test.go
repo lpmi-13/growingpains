@@ -12,7 +12,7 @@ func testPlayground() *Playground {
 	return &Playground{Manifests: k8s.FS, Cfg: Config{
 		ShopImage: "registry.growingpains.internal/shop:1", ValkeyImage: "valkey:9.1", PauseImage: "pause:3.10",
 		AppDSN: "postgresql://shop@node-01/shop", ConfigURL: "http://ops-01:7000/config",
-		ClusterDNS: "10.43.0.10", LegacyServer: "127.0.0.1:8000", FleetHost: "api.shop.svc.cluster.local", APIPort: 8000,
+		ClusterDNS: "10.43.0.10", LegacyServer: "127.0.0.1:8000", LegacyAddr: "node-01:8000", FleetHost: "api.shop.svc.cluster.local", APIPort: 8000,
 		ReplicaDSN: "postgresql://shop@%s/shop", Nodes: map[string]string{"node-04": "172.16.0.14"},
 	}}
 }

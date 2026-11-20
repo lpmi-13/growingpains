@@ -26,8 +26,9 @@ func TestWordGetsOutShape(t *testing.T) {
 		}
 		prev = r
 	}
-	if peak := s.At(16 * time.Minute).Rate; peak < 700*0.85 || peak > 700*1.15 {
-		t.Fatalf("plateau %.0f outside 700 ± 15%%", peak)
+	// The plan says 700; the playground's database needs 800 (docs/plan-deviations.md).
+	if peak := s.At(16 * time.Minute).Rate; peak < 800*0.85 || peak > 800*1.15 {
+		t.Fatalf("plateau %.0f outside 800 ± 15%%", peak)
 	}
 	if len(s.HotProducts) != 20 {
 		t.Fatalf("got %d hot products", len(s.HotProducts))

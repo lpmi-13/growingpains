@@ -13,8 +13,11 @@ systemctl stop gp-pg-replica.service 2>/dev/null || true
 rm -rf "$data"
 install -d -o postgres -g postgres -m 0700 "$data"
 # The password lives in the postgres user's .pgpass, written when the image was built.
+# Capped, because node-01's link carries about 20 MB/s and also every shop response: on the
+# first playground run an uncapped backup took all of it for 15 s, and ~3,500 requests timed
+# out. 6 MB/s leaves the shop about 14 MB/s and takes 45-55 s for a 250-330 MB database.
 runuser -u postgres -- /usr/lib/postgresql/18/bin/pg_basebackup \
-  -h "$primary" -U replicator -D "$data" -R -X stream -S "$slot" -c fast --no-password
+  -h "$primary" -U replicator -D "$data" -R -X stream -S "$slot" -c fast --max-rate=6M --no-password
 cat >>"$data/postgresql.auto.conf" <<CONF
 hot_standby = on
 hot_standby_feedback = on

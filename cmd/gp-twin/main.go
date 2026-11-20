@@ -27,12 +27,23 @@ func main() {
 	delay := flag.Duration("delay", 0, "timing control: every move waits this long after its decision")
 	asJSON := flag.Bool("json", false, "print the result as JSON")
 	explain := flag.String("explain", "", "comma-separated run times (like 3m,9m) to break the load down at, then exit")
+	apiCost := flag.Float64("api-cost", 1, "multiply every API CPU cost: what-if for a host faster or slower than the local stack")
+	dbCost := flag.Float64("db-cost", 1, "multiply every database statement cost, and so the database's CPU: the same what-if for PostgreSQL")
+	dbCap := flag.Float64("db-cap", 0, "what-if CPU cap in playground cores for each database instance (0: the images' cap); the architect's ledger keeps db.medium units")
+	replicaCap := flag.Float64("replica-cap", 0, "what-if CPU cap for only the replica (0: same as db-cap)")
+	searchCost := flag.Float64("search-cost", 1, "what-if multiplier for search statement CPU and tail latency (1: measured PostgreSQL search)")
 	flag.Parse()
+	costs := twin.Measured.ScaleAPI(*apiCost).ScaleDB(*dbCost)
+	costs.DBSearch *= *searchCost
 
 	ix := catalog.Build(catalog.Default)
 	if *explain != "" {
 		story := storyline.ByName(*story, *seed, ix)
-		sys := twin.NewSystem(ix, story, *seed, twin.Measured)
+		cores := twin.PlaygroundDBCores
+		if *dbCap > 0 {
+			cores = *dbCap
+		}
+		sys := twin.NewSystem(ix, story, *seed, costs, cores)
 		for _, at := range strings.Split(*explain, ",") {
 			d, err := time.ParseDuration(at)
 			if err != nil {
@@ -48,7 +59,7 @@ func main() {
 		return
 	}
 	opts := twin.DefaultOptions
-	opts.Storyline, opts.Enabled, opts.Delay = *story, !*disabled, *delay
+	opts.Storyline, opts.Enabled, opts.Delay, opts.Costs, opts.DBCores, opts.ReplicaCores = *story, !*disabled, *delay, costs, *dbCap, *replicaCap
 	if *sweep > 0 {
 		sweepSeeds(ix, *sweep, opts)
 		return
@@ -62,9 +73,9 @@ func main() {
 		json.NewEncoder(os.Stdout).Encode(res)
 		return
 	}
-	fmt.Printf("seed %d, %s\n\n%6s %6s %5s %5s %6s %6s %4s  %s\n", res.Seed, res.Storyline, "t", "req/s", "api", "db", "repeat", "errors", "pods", "armed")
+	fmt.Printf("seed %d, %s\n\n%6s %6s %5s %5s %6s %6s %7s %4s  %s\n", res.Seed, res.Storyline, "t", "req/s", "api", "db", "repeat", "errors", "search1m", "pods", "armed")
 	for _, s := range res.Samples {
-		fmt.Printf("%6s %6.0f %5.2f %5.2f %6.2f %6.3f %4d  %s\n", clock(s.T), s.Rate, s.API, s.DB, s.Repeat, s.Errors, s.Pods, strings.Join(s.Armed, ","))
+		fmt.Printf("%6s %6.0f %5.2f %5.2f %6.2f %6.3f %7.3f %4d  %s\n", clock(s.T), s.Rate, s.API, s.DB, s.Repeat, s.Errors, s.SearchAvailability1m, s.Pods, strings.Join(s.Armed, ","))
 	}
 	fmt.Println()
 	for _, m := range res.Moves {
@@ -87,7 +98,8 @@ func main() {
 			fmt.Printf("%s  no move for %s: %s\n", clock(e.At.Sub(res.Start)), e.Pressure, e.Text)
 		}
 	}
-	fmt.Printf("\nrequests %.0f, failed %.0f (%.3f%%), worst 5-minute availability %.4f\n", res.Requests, res.Errors, 100*res.Errors/res.Requests, res.WorstAvailability)
+	fmt.Printf("\nrequests %.0f, failed %.0f (%.3f%%), worst 5-minute availability %.4f; worst journey %s %.4f\n",
+		res.Requests, res.Errors, 100*res.Errors/res.Requests, res.WorstAvailability, res.WorstJourney, res.WorstJourneyAvailability)
 	if why := res.Validate(); len(why) > 0 {
 		fmt.Printf("seed rejected: %s\n", strings.Join(why, "; "))
 	} else {
@@ -137,7 +149,7 @@ func sweepSeeds(ix *catalog.Index, n int, opts twin.Options) {
 				timing[m.Move] = append(timing[m.Move], m.Decided)
 			}
 		}
-		worst = append(worst, res.WorstAvailability)
+		worst = append(worst, res.WorstJourneyAvailability)
 		why := res.Validate()
 		if len(why) == 0 {
 			valid++
@@ -172,7 +184,7 @@ func sweepSeeds(ix *catalog.Index, n int, opts twin.Options) {
 		fmt.Printf("  %-18s %s  %s  %s  (n=%d)\n", move, clock(ts[0]), clock(ts[len(ts)/2]), clock(ts[len(ts)-1]), len(ts))
 	}
 	sort.Float64s(worst)
-	fmt.Printf("\nworst 5-minute availability: min %.4f, median %.4f\n", worst[0], worst[len(worst)/2])
+	fmt.Printf("\nworst journey's 5-minute availability: min %.4f, median %.4f\n", worst[0], worst[len(worst)/2])
 	fmt.Printf("\nvalid seeds: %d of %d\n", valid, n)
 	for k, v := range reasons {
 		fmt.Printf("  %4d  %s\n", v, k)

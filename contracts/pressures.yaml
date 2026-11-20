@@ -6,8 +6,13 @@
   family: volume
   priority: 1
   # The fleet takes about two minutes to become useful, and traffic can double in that time,
-  # so the pressure also arms when CPU is forecast to reach 80% two minutes ahead.
-  arm: "api.cpu_ratio >= 0.75 || api.queue_time_p95 >= 0.025 || ahead.api.cpu_ratio >= 0.8"
+  # so the pressure also arms when CPU is forecast to reach 60% two minutes ahead. Once
+  # measured traffic has passed 30 req/s, 25% current CPU is enough leading evidence: the
+  # old process cannot survive the next two minutes of the ramp while the fleet starts.
+  # A 20 req/s floor prevents idle or stale telemetry from moving the architecture.
+  arm: >-
+    traffic.rate >= 20 && (api.cpu_ratio >= 0.75 || api.queue_time_p95 >= 0.025 ||
+    ahead.api.cpu_ratio >= 0.6 || (traffic.rate >= 30 && api.cpu_ratio >= 0.25))
   disarm: "api.cpu_ratio < 0.6 && api.queue_time_p95 < 0.010"
   sustain: 30s
   lead: 2m
@@ -17,21 +22,41 @@
 - name: db-read
   family: read-pattern
   priority: 2
-  # Reads dominate, and either the primary is hot, or reads use most of the combined capacity of
-  # every instance, or the busiest instance is close to its limit. A replica takes about two
-  # minutes to serve, so the primary's forecast counts too.
+  # A read-heavy primary above 280 req/s needs a replica before its multi-minute backup and
+  # route can finish. CPU and forecast signals still arm when they lead that traffic shape.
   arm: >-
-    db.read_share >= 0.6 && (db.primary_cpu_ratio >= 0.70 || db.read_cpu_ratio >= 0.70 || db.cpu_ratio >= 0.9
-    || ahead.db.primary_cpu_ratio >= 0.85 || ahead.db.read_cpu_ratio >= 0.85)
+    (state.replicas == 0 && traffic.rate >= 280 && db.read_share >= 0.5) ||
+    (db.read_share >= 0.6 && (db.primary_cpu_ratio >= 0.60 || db.read_cpu_ratio >= 0.70 ||
+    db.cpu_ratio >= 0.9 || ahead.db.primary_cpu_ratio >= 0.85 || ahead.db.read_cpu_ratio >= 0.85))
   disarm: "db.primary_cpu_ratio < 0.55 && db.read_cpu_ratio < 0.55 && db.cpu_ratio < 0.75"
   sustain: 45s
+  # Once a replica is serving, the flash sale can saturate it within a minute. The cache's
+  # rising-repeat shape remains a second guard, so five seconds of read pressure gives the
+  # replica CPU buffer time to act before the minute's latency window closes.
+  sustain_when:
+    - {when: "state.replicas >= 1", for: 5s}
   lead: 2m
   says: >-
     The busiest database is at {{pct .db.cpu_ratio}} of its CPU limit, and reads take {{pct .db.read_share}}
     of its time. Listing pages are {{pct .traffic.listing_share}} of requests.
+- name: read-reuse
+  family: read-pattern
+  priority: 3
+  # A replica now unlocks its reserved CPU before routing. Repetition, rather than another
+  # quota bottleneck, is the measured reason to add a cache as the flash sale heats up.
+  arm: >-
+    state.cache == false && traffic.rate >= 300 && db.read_share >= 0.5 &&
+    (reads.repeat_ratio >= 0.6 || (state.replicas >= 1 && reads.repeat_ratio >= 0.3))
+  disarm: >-
+    state.cache == true || traffic.rate < 250 || (state.replicas >= 1 && reads.repeat_ratio < 0.25) ||
+    (state.replicas == 0 && reads.repeat_ratio < 0.5)
+  sustain: 5s
+  says: >-
+    {{pct .reads.repeat_ratio}} of listing and product reads repeat, at {{rps .traffic.rate}};
+    {{pct .reads.anonymous_share}} are anonymous.
 - name: db-connections
   family: clients-connections
-  priority: 3
+  priority: 4
   arm: "db.connections_ratio >= 0.7"
   disarm: "db.connections_ratio < 0.5"
   sustain: 30s

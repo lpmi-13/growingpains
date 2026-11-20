@@ -77,6 +77,70 @@ def row(title: str, y: int) -> dict:
     return {"id": next_id(), "type": "row", "title": title, "collapsed": False, "gridPos": {"x": 0, "y": y, "w": 24, "h": 1}, "panels": []}
 
 
+def canvas_element(name: str, label: str, left: int, top: int, width: int, height: int,
+                   field: str | None = None, ghost: bool = False) -> dict:
+    element = {
+        "name": name, "type": "rectangle",
+        "placement": {"left": left, "top": top, "width": width, "height": height},
+        "constraint": {"horizontal": "left", "vertical": "top"},
+        "config": {"text": {"mode": "fixed", "fixed": label}, "align": "center", "valign": "middle",
+                   "size": 14, "color": {"fixed": "#313842"}},
+        "background": {"color": {"fixed": "#f1f3f5" if ghost else "#ffffff"}},
+        "border": {"width": 1, "color": {"fixed": "#b7bdc7"}},
+    }
+    if field:
+        element["background"]["color"]["field"] = field
+    return element
+
+
+def architecture_canvas(y: int) -> dict:
+    """The plan's ghost/active/migrating map, bound to gp_component_state."""
+    nodes = [
+        ("ops-01", "Control", 20), ("node-01", "Edge + primary", 200),
+        ("node-02", "Compute", 380), ("node-03", "Compute", 560),
+        ("node-04", "Data + cache", 740),
+    ]
+    elements = [canvas_element("flow", "Crowd → nginx → API → PostgreSQL", 20, 5, 880, 30)]
+    for node, role, left in nodes:
+        elements.append(canvas_element(node, f"{node} · {role}", left, 48, 160, 244, ghost=True))
+    components = [
+        ("shop control", "Architect · Crowd", 35, 100, None),
+        ("edge", "nginx", 215, 100, "edge"),
+        ("legacy", "API process", 215, 150, "legacy"),
+        ("primary", "PostgreSQL primary", 215, 200, "primary"),
+        ("fleet-02", "API fleet", 395, 100, "fleet_02"),
+        ("fleet-03", "API fleet", 575, 100, "fleet_03"),
+        ("replica", "Read replica", 755, 100, "replica"),
+        ("cache", "Valkey cache", 755, 150, "cache"),
+    ]
+    for name, label, left, top, field in components:
+        elements.append(canvas_element(name, label, left, top, 130, 40, field, ghost=field is not None))
+    targets = []
+    for i, (field, component, node) in enumerate([
+        ("edge", "nginx", "node-01"), ("legacy", "api-legacy", "node-01"),
+        ("primary", "pg-primary", "node-01"),
+        ("fleet_02", "api-fleet", "node-02"), ("fleet_03", "api-fleet", "node-03"),
+        ("replica", "pg-replica-1", "node-04"), ("cache", "valkey", "node-04"),
+    ]):
+        # After a reset, Prometheus can serve an old component sample for its five-minute
+        # lookback. A short range makes a missing component visibly dormant immediately.
+        t = target(f'max(last_over_time(gp_component_state{{component="{component}",node="{node}"}}[20s])) or vector(0)',
+                   field, chr(65 + i), instant=True)
+        targets.append(t)
+    return {
+        "id": next_id(), "type": "canvas", "title": "Living architecture",
+        "description": "Grey outlines are dormant or retired; green is active; amber is migrating. Driven by the architect's component state.",
+        "datasource": DS, "gridPos": {"x": 0, "y": y, "w": 24, "h": 12},
+        "targets": targets,
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+                                     "thresholds": thresholds([(None, "#e5e7eb"), (1, GREEN), (2, AMBER), (3, GREY)])},
+                        "overrides": []},
+        "options": {"inlineEditing": False, "showAdvancedTypes": False, "panZoom": False,
+                    "zoomToContent": True, "tooltip": {"mode": "none"},
+                    "root": {"name": "architecture", "type": "frame", "elements": elements}},
+    }
+
+
 def build() -> dict:
     panels = []
     y = 0
@@ -166,6 +230,38 @@ def build() -> dict:
         ("sum by (kind) (gp_probe_correctness_errors_total)", "prober {{kind}}")], 12, y, w=12, fill=0,
         description="A 404 for something the ledger says exists, or an old description after a confirmed edit."))
     y += 8
+    # 6. Architecture
+    panels.append(row("Architecture", y)); y += 1
+    panels.append(architecture_canvas(y)); y += 12
+    panels.append({
+        "id": next_id(), "type": "state-timeline", "title": "Component states",
+        "description": "1 active, 2 migrating, 3 retired; new series appear when capacity is acquired.",
+        "datasource": DS, "gridPos": {"x": 0, "y": y, "w": 24, "h": 7},
+        "targets": [target('gp_component_state{kind=~"api|api-fleet|postgres-primary|postgres-replica|valkey"}',
+                           "{{component}} @ {{node}}")],
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+                                     "thresholds": thresholds([(None, GREY), (1, GREEN), (2, AMBER), (3, GREY)])},
+                        "overrides": []},
+        "options": {"mergeValues": True, "showValue": "auto", "rowHeight": 0.8},
+    })
+    panels.append({
+        "id": next_id(), "type": "table", "title": "Move history and change-window errors",
+        "description": "One row per finished move: decision and completion time, duration in seconds, verdict, change-window requests, and failed requests (Value). Open the narrator's decision records for the evidence and alternatives.",
+        "datasource": DS, "gridPos": {"x": 0, "y": y + 7, "w": 24, "h": 7},
+        "targets": [{**target("gp_narrator_move_change_errors", "", "A", instant=True), "format": "table"}],
+        "transformations": [{"id": "organize", "options": {
+            "excludeByName": {"Time": True, "__name__": True, "attempt": True,
+                              "instance": True, "job": True},
+            "indexByName": {"move": 0, "decided_at": 1, "ended_at": 2,
+                            "duration_s": 3, "requests": 4, "Value": 5, "verdict": 6},
+            "renameByName": {"move": "Move", "decided_at": "Decided",
+                             "ended_at": "Verified", "duration_s": "Duration (s)",
+                             "requests": "Requests", "Value": "Errors", "verdict": "Verdict"},
+        }}],
+        "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []},
+        "options": {"showHeader": True},
+    })
+    y += 14
     # 7. Pressure gauges (filled in by the architect's signals)
     panels.append(row("Pressure", y)); y += 1
     panels.append(series("Pressure signals against thresholds", [("gp_architect_signal", "{{signal}}")], 0, y, w=16, fill=0,

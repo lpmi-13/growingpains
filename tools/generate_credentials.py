@@ -51,7 +51,6 @@ def main() -> None:
     write("prometheus.token", prometheus_token + "\n")
     write("k3s-server.yaml", "\n".join([
         f"token: {k3s}",
-        "token-auth-file: /etc/rancher/k3s/tokens.csv",
         f"node-ip: {ADDRESSES['ops-01']}",
         "write-kubeconfig-mode: '0600'",
         # Like a managed control plane: it runs no shop pods.
@@ -59,6 +58,8 @@ def main() -> None:
         "disable: [traefik, servicelb]",
         "disable-helm-controller: true",
         "kube-controller-manager-arg: ['horizontal-pod-autoscaler-sync-period=5s']",
+        # k3s has no flag of its own for this: it skips an unknown key, and every token then gets 401.
+        "kube-apiserver-arg: ['token-auth-file=/etc/rancher/k3s/tokens.csv']",
         "",
     ]))
     write("k3s-agent.yaml", f"server: https://{ADDRESSES['ops-01']}:6443\ntoken: {k3s}\n")
@@ -85,7 +86,8 @@ def main() -> None:
     write("pgbouncer-userlist.txt", f'"shop" "{pw["shop"]}"\n')
     write("api.env", f"GP_DATABASE_URL=postgresql://shop:{pw['shop']}@127.0.0.1:5432/shop\n"
           f"GP_CONFIG_URL=http://{ADDRESSES['ops-01']}:7000/config\n")
-    write("agent-dsn", f"host=127.0.0.1 port=5432 dbname=shop user=gp_agent password={pw['gp_agent']}\n")
+    # A URL, not key=value pairs: it travels in GP_AGENT_ARGS, which systemd splits on whitespace.
+    write("agent-dsn", f"postgresql://gp_agent:{pw['gp_agent']}@127.0.0.1:5432/shop\n")
     write("grafana.env", f"GF_SECURITY_ADMIN_PASSWORD={pw['grafana']}\n")
     write("architect.env", f"GP_GRAFANA_PASSWORD={pw['grafana']}\nGP_ARCHITECT_ARGS=\n")
     write("playground.json", json.dumps({
@@ -105,6 +107,7 @@ def main() -> None:
         "config_url": f"http://{ADDRESSES['ops-01']}:7000/config",
         "cluster_dns": "10.43.0.10",
         "legacy_server": "127.0.0.1:8000",
+        "legacy_addr": "node-01:8000",
         "fleet_host": "api.shop.svc.cluster.local",
         "api_port": 8000,
     }, indent=1) + "\n")

@@ -25,16 +25,23 @@ func (s *pressureState) update(p *Pressure, env Env, now time.Time) string {
 	if err != nil {
 		arm = false // unknown never arms a pressure
 	}
+	sustain := p.Sustain.D()
+	for _, rule := range p.SustainWhen {
+		if matches, err := Bool(rule.When, env); err == nil && matches {
+			sustain = rule.For.D()
+			break
+		}
+	}
 	if !s.Armed {
 		switch {
 		case arm && s.Since.IsZero():
 			s.Since = now
-			if p.Sustain.D() == 0 {
+			if sustain == 0 {
 				s.Armed, s.ArmedAt = true, now
 				return "armed"
 			}
 			return "pending"
-		case arm && now.Sub(s.Since) >= p.Sustain.D():
+		case arm && now.Sub(s.Since) >= sustain:
 			s.Armed, s.ArmedAt = true, now
 			return "armed"
 		case !arm:
@@ -99,7 +106,8 @@ const closeRelief = 0.10
 // Diagnose reads the shape of an armed pressure and ranks the moves that answer it.
 //
 // A move is eligible when its shape conditions hold, its preconditions hold, its footprint
-// fits the ledger, and, with under a quarter of the error budget left, it is protective.
+// fits the ledger, and, with under a quarter of the error budget left, it is protective
+// or explicitly marked as a reversible, pressure-relieving architecture move.
 // Eligible moves rank by predicted relief. When reliefs are within 10%, the move that adds
 // fewer new components wins, and any remaining tie breaks by name.
 func Diagnose(cat *Catalog, p *Pressure, env Env, model *Model, excluded map[string]string, now time.Time) Decision {
@@ -122,7 +130,7 @@ func Diagnose(cat *Catalog, p *Pressure, env Env, model *Model, excluded map[str
 		switch {
 		case excluded[m.Name] != "":
 			o.Reason = excluded[m.Name]
-		case budgetLow && m.Class != "protective":
+		case budgetLow && m.Class != "protective" && !m.BudgetProtective:
 			o.Reason = "less than 25% of the error budget is left, so only protective moves are allowed"
 		default:
 			if ok, why := AllOf(m.Preconditions, env); !ok {

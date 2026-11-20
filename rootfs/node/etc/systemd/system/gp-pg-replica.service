@@ -1,5 +1,5 @@
 # A streaming read replica, created by the architect's pg-replica-create action, under the
-# same caps as the primary.
+# same starting cap as the primary. The cache move can raise it within its reserved CPU.
 [Unit]
 Description=Growing Pains PostgreSQL read replica
 After=network-online.target
@@ -14,7 +14,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed
 KillSignal=SIGINT
 TimeoutSec=120
-CPUQuota=150%
+CPUQuota=65%
 CPUQuotaPeriodSec=10ms
 MemoryMax=1536M
 

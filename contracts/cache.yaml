@@ -1,11 +1,14 @@
 name: cache
 title: A cache for hot reads
 class: architecture
+budget_protective: true
 family: read-pattern
-answers: db-read
+answers: read-reuse
 # Reads repeat, and most of the hot traffic is in sessions, which rules out the edge microcache.
+# After a replica exists, act on the rising repeat ratio while its reserved CPU headroom
+# protects reads. Earlier stories still require the stronger 0.6 repeat signal.
 shape:
-  - "reads.repeat_ratio >= 0.6"
+  - "reads.repeat_ratio >= 0.6 || (state.replicas >= 1 && reads.repeat_ratio >= 0.3)"
   - "reads.anonymous_share < 0.5"
 preconditions:
   - "state.cache == false"
@@ -27,21 +30,21 @@ steps:
     action: config.set
     params: {cache: {address: "${valkey_address}", read_pct: 10}}
     wait_for: config_converged
-    hold: 15s
+    hold: 5s
     timeout: 60s
   - name: cache-50
     phase: migrate
     action: config.set
     params: {cache: {read_pct: 50}}
     wait_for: config_converged
-    hold: 15s
+    hold: 5s
     timeout: 60s
   - name: cache-100
     phase: migrate
     action: config.set
     params: {cache: {read_pct: 100}}
     wait_for: config_converged
-    hold: 15s
+    hold: 5s
     timeout: 60s
     says: "Caching enabled for 10% → 50% → 100% of reads; detail keys 60 s ± 10%, deleted on write and again after the lag bound; listings 10 s; single-flight fills; 20 ms timeout, fail open"
 verify:

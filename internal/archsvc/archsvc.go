@@ -197,7 +197,7 @@ func (g *Grafana) Annotate(at time.Time, tags []string, text string) {
 type Metrics struct {
 	a *architect.Architect
 
-	stage, move, pressure, signal, component *prometheus.Desc
+	stage, move, pressure, signal, component, history *prometheus.Desc
 }
 
 // NewMetrics describes the architect.
@@ -209,10 +209,15 @@ func NewMetrics(a *architect.Architect) *Metrics {
 		pressure:  prometheus.NewDesc("gp_architect_pressure_armed", "1 armed, 0.5 pending (its sustain timer runs), 0 idle", []string{"pressure"}, nil),
 		signal:    prometheus.NewDesc("gp_architect_signal", "Each signal as the architect last read it", []string{"signal"}, nil),
 		component: prometheus.NewDesc("gp_component_state", "Each component: 1 active, 2 migrating, 3 retired", []string{"component", "kind", "node"}, nil),
+		history:   prometheus.NewDesc("gp_architect_move_duration_seconds", "Finished moves, with their decision and completion times", []string{"move", "verdict", "decided_at", "ended_at", "attempt"}, nil),
 	}
 }
 
-func (m *Metrics) Describe(ch chan<- *prometheus.Desc) { prometheus.DescribeByCollect(m, ch) }
+func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
+	for _, d := range []*prometheus.Desc{m.stage, m.move, m.pressure, m.signal, m.component, m.history} {
+		ch <- d
+	}
+}
 
 func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	st, sig := m.a.Snapshot()
@@ -220,6 +225,10 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(m.stage, prometheus.GaugeValue, float64(st.Model.Stage))
+	for i, r := range st.History {
+		ch <- prometheus.MustNewConstMetric(m.history, prometheus.GaugeValue, r.Ended.Sub(r.Started).Seconds(),
+			r.Move, r.Verdict, r.Started.Format(time.RFC3339), r.Ended.Format(time.RFC3339), strconv.Itoa(i+1))
+	}
 	if st.Active != nil {
 		ch <- prometheus.MustNewConstMetric(m.move, prometheus.GaugeValue, 1, st.Active.Move, st.Active.Phase)
 	}

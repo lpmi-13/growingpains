@@ -17,8 +17,9 @@ USER root
 ENV HOME=/root
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       ca-certificates curl iproute2 jq less lsof procps openssh-client prometheus-node-exporter vim-tiny \
-    && systemctl enable prometheus-node-exporter \
+       ca-certificates chrony curl iproute2 jq less lsof procps openssh-client prometheus-node-exporter vim-tiny \
+    && { systemctl disable systemd-timesyncd 2>/dev/null || true; } \
+    && systemctl enable chrony prometheus-node-exporter \
     && rm -rf /var/lib/apt/lists/*
 ADD --checksum=sha256:265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda \
     --chmod=755 https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s /usr/local/bin/k3s
@@ -44,6 +45,10 @@ RUN set -eu; \
     /tmp/db/gp-seed | su postgres -c "psql -q -v ON_ERROR_STOP=1 -d shop" >/dev/null; \
     su postgres -c "psql -q -v ON_ERROR_STOP=1 -d shop -f /tmp/db/grants.sql"; \
     pg_ctlcluster 18 main stop; \
+    install -d -m 0700 /opt/gp; \
+    tar -C /var/lib/postgresql/18 -czf /opt/gp/genesis-db.tar.gz main; \
+    sha256sum /opt/gp/genesis-db.tar.gz > /opt/gp/genesis-db.sha256; \
+    chmod 0600 /opt/gp/genesis-db.tar.gz /opt/gp/genesis-db.sha256; \
     rm -rf /tmp/db; \
     truncate --no-create -s 0 /var/log/postgresql/postgresql-18-main.log
 # The genesis API runs the shop image's own filesystem (RootDirectory=).
@@ -65,6 +70,13 @@ RUN set -eu; \
     chown root:gp-agent /etc/gp/agent-dsn; chmod 0640 /etc/gp/agent-dsn /etc/gp/api.env; \
     chown postgres:postgres /etc/pgbouncer/userlist.txt; chmod 0600 /etc/pgbouncer/userlist.txt; \
     install -d -o postgres -g postgres -m 0700 /var/lib/gp; \
+    # Ubuntu's 768 connections a worker (1,536 on node-01's two) let slow clients fill every slot
+    # in the 2026-11-15 control run, so nginx could not reach the API even once it was idle. A
+    # client and its upstream take one descriptor each, and the unit's soft limit is 1,024.
+    sed -i -e 's/^\(\s*\)worker_connections 768;/\1worker_connections 4096;/' \
+        -e 's/^worker_processes auto;$/&\nworker_rlimit_nofile 16384;/' /etc/nginx/nginx.conf; \
+    grep -Eq '^\s*worker_connections 4096;' /etc/nginx/nginx.conf; \
+    grep -q '^worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf; \
     nginx -t; \
     systemctl enable gp-node-role gp-agent k3s-agent
 USER laborant
@@ -109,6 +121,7 @@ RUN set -eu; \
     chmod 0600 /etc/rancher/k3s/config.yaml /etc/rancher/k3s/tokens.csv /etc/gp/*; chmod 0644 /etc/gp/architect.env; \
     chown root:prometheus /etc/prometheus/k8s.token; chmod 0640 /etc/prometheus/k8s.token; \
     chown root:grafana /etc/grafana/grafana.env; chmod 0640 /etc/grafana/grafana.env; \
+    install -d -m 0700 /root/.kube; ln -s /etc/rancher/k3s/k3s.yaml /root/.kube/config; \
     systemctl enable k3s prometheus grafana gp-architect gp-narrator gp-crowd gp-prober
 USER laborant
 ENV HOME=/home/laborant

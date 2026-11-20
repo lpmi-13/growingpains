@@ -33,6 +33,12 @@ type Pressure struct {
 	Arm     string   `yaml:"arm"`
 	Disarm  string   `yaml:"disarm"`
 	Sustain Duration `yaml:"sustain"`
+	// SustainWhen shortens or lengthens the evidence window in a known architecture state.
+	// The arm condition still has to hold continuously; the first matching rule applies.
+	SustainWhen []struct {
+		When string   `yaml:"when"`
+		For  Duration `yaml:"for"`
+	} `yaml:"sustain_when"`
 	// Lead lets the condition read ahead.*: each signal forecast this far ahead by a linear fit
 	// over the last two minutes, so a move that is slow to become useful starts in time.
 	Lead     Duration `yaml:"lead"`
@@ -67,9 +73,15 @@ type Step struct {
 
 // Contract is a move: when it is the right cure, what it costs, how it runs, and how it undoes.
 type Contract struct {
-	Name          string      `yaml:"name"`
-	Title         string      `yaml:"title"`
-	Class         string      `yaml:"class"` // architecture, tuning, protective, or contract
+	Name  string `yaml:"name"`
+	Title string `yaml:"title"`
+	Class string `yaml:"class"` // architecture, tuning, protective, or contract
+	// BudgetProtective permits a reversible, pressure-relieving architecture move even when
+	// the error budget is low. It still counts as architecture for the MVP path.
+	BudgetProtective bool `yaml:"budget_protective"`
+	// CooldownAfter sets the post-move wait when the next pressure can grow faster
+	// than the global cooldown. Rollbacks always use the global cooldown.
+	CooldownAfter Duration    `yaml:"cooldown_after"`
 	Family        string      `yaml:"family"`
 	Answers       string      `yaml:"answers"`       // the pressure
 	Shape         []string    `yaml:"shape"`         // conditions that make this the right cure
@@ -88,6 +100,10 @@ type Contract struct {
 		// ScaleWithTraffic compares like with like when the target grows with load, such as a
 		// CPU ratio: the baseline and the prediction are scaled by how much traffic grew.
 		ScaleWithTraffic bool `yaml:"scale_with_traffic"`
+		// ReportOnly targets are measured and narrated but never judged against the
+		// prediction: a latency does not scale with traffic, so across a run's growth the
+		// comparison means nothing, and the checks decide.
+		ReportOnly bool `yaml:"report_only"`
 	} `yaml:"verify"`
 	Rollback []Step `yaml:"rollback"`
 	// Effects change the architecture model once the move completes.
@@ -160,6 +176,11 @@ func (c *Catalog) validate() error {
 				return fmt.Errorf("pressure %s: %w", p.Name, err)
 			}
 		}
+		for _, rule := range p.SustainWhen {
+			if _, err := compile(rule.When); err != nil {
+				return fmt.Errorf("pressure %s sustain_when: %w", p.Name, err)
+			}
+		}
 	}
 	for _, m := range c.Moves {
 		if !pressures[m.Answers] {
@@ -169,6 +190,12 @@ func (c *Catalog) validate() error {
 		case "architecture", "tuning", "protective", "contract":
 		default:
 			return fmt.Errorf("move %s has unknown class %q", m.Name, m.Class)
+		}
+		if m.BudgetProtective && len(m.Rollback) == 0 {
+			return fmt.Errorf("move %s is budget-protective but has no rollback", m.Name)
+		}
+		if m.CooldownAfter.D() < 0 {
+			return fmt.Errorf("move %s has negative cooldown_after", m.Name)
 		}
 		srcs := append(append(append([]string{m.Relief}, m.Shape...), m.Preconditions...), m.Guards...)
 		srcs = append(srcs, m.Verify.Checks...)

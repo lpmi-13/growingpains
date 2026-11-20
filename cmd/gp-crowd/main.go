@@ -58,11 +58,33 @@ func main() {
 		go func() {
 			select {
 			case <-ctx.Done():
+				return
 			case <-time.After(*autostart):
-				if !engine.Status().Started {
-					if err := start(*seedFlag); err != nil {
-						log.Warn("autostart", "err", err)
+			}
+			// A fresh playground may still be booting. The crowd may see only the shop's
+			// public HTTP interface, so wait for that interface before starting the run.
+			client := &http.Client{Timeout: 3 * time.Second}
+			tick := time.NewTicker(5 * time.Second)
+			defer tick.Stop()
+			for {
+				if engine.Status().Started {
+					return
+				}
+				resp, err := client.Get(cfg.Base + "/")
+				if err == nil {
+					resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						if err := start(*seedFlag); err != nil && !engine.Status().Started {
+							log.Warn("autostart", "err", err)
+						} else {
+							return
+						}
 					}
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
 				}
 			}
 		}()

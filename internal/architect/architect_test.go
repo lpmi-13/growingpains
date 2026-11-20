@@ -72,7 +72,7 @@ func TestMVPDecisions(t *testing.T) {
 	if d.Chosen != "read-replica" {
 		t.Fatalf("chapter 2 chose %q: %+v", d.Chosen, d.Options)
 	}
-	if o := option(d, "cache"); o.Eligible || !strings.HasPrefix(o.Reason, "shape:") {
+	if o := option(Diagnose(c, pressure(c, "read-reuse"), NewEnv(chapter2, m.StateEnv(), m.LedgerEnv()), m, nil, now), "cache"); o.Eligible || !strings.HasPrefix(o.Reason, "shape:") {
 		t.Fatalf("a cache should lose on shape when reads do not repeat: %+v", o)
 	}
 	if o := option(d, "db-scale-up"); o.Eligible || !strings.Contains(o.Reason, "node-01 has no spare CPU") {
@@ -81,15 +81,50 @@ func TestMVPDecisions(t *testing.T) {
 	replica, _ := d.Choice()
 	m.Apply(c.Move("read-replica"), replica.Placed)
 
-	d = Diagnose(c, pressure(c, "db-read"), NewEnv(chapter3, m.StateEnv(), m.LedgerEnv()), m, nil, now)
+	d = Diagnose(c, pressure(c, "read-reuse"), NewEnv(chapter3, m.StateEnv(), m.LedgerEnv()), m, nil, now)
 	if d.Chosen != "cache" {
 		t.Fatalf("chapter 3 chose %q: %+v", d.Chosen, d.Options)
 	}
-	if o := option(d, "second-replica"); o.Eligible || !strings.Contains(o.Reason, "no spare CPU") {
+	if o := option(Diagnose(c, pressure(c, "db-read"), NewEnv(chapter3, m.StateEnv(), m.LedgerEnv()), m, nil, now), "second-replica"); o.Eligible || !strings.Contains(o.Reason, "no spare CPU") {
 		t.Fatalf("a second replica should lose on the ledger: %+v", o)
 	}
-	if o := option(d, "read-replica"); o.Eligible || !strings.Contains(o.Reason, "precondition") {
+	if o := option(Diagnose(c, pressure(c, "db-read"), NewEnv(chapter3, m.StateEnv(), m.LedgerEnv()), m, nil, now), "read-replica"); o.Eligible || !strings.Contains(o.Reason, "precondition") {
 		t.Fatalf("the first replica's contract should not apply again: %+v", o)
+	}
+}
+
+func TestLowBudgetStillAllowsReversiblePressureRelief(t *testing.T) {
+	c := catalog(t)
+	m := Genesis()
+	now := time.Now()
+	low := func(src signals.Values) signals.Values {
+		out := signals.Values{}
+		for k, v := range src {
+			out[k] = v
+		}
+		out["slo.budget_remaining"] = 0.1
+		return out
+	}
+	for _, tc := range []struct {
+		pressure string
+		values   signals.Values
+		want     string
+	}{
+		{"api-compute", chapter1, "autoscaled-fleet"},
+		{"db-read", chapter2, "read-replica"},
+		{"read-reuse", chapter3, "cache"},
+	} {
+		d := Diagnose(c, pressure(c, tc.pressure), NewEnv(low(tc.values), m.StateEnv(), m.LedgerEnv()), m, nil, now)
+		if d.Chosen != tc.want {
+			t.Fatalf("low-budget %s chose %q: %+v", tc.pressure, d.Chosen, d.Options)
+		}
+		chosen, _ := d.Choice()
+		m.Apply(c.Move(tc.want), chosen.Placed)
+	}
+	d := Diagnose(c, pressure(c, "api-compute"), NewEnv(low(chapter1), Genesis().StateEnv(), Genesis().LedgerEnv()),
+		Genesis(), map[string]string{"autoscaled-fleet": "excluded for test"}, now)
+	if o := option(d, "api-scale-up"); o.Eligible || !strings.Contains(o.Reason, "only protective moves") {
+		t.Fatalf("unproven tuning move should stay gated: %+v", o)
 	}
 }
 
@@ -118,6 +153,109 @@ func TestUnknownNeverArms(t *testing.T) {
 	}
 }
 
+func TestFleetLeadingTrafficPressure(t *testing.T) {
+	p := pressure(catalog(t), "api-compute")
+	now := time.Now()
+	st := &pressureState{}
+	calm := signals.Values{"traffic.rate": 0, "api.cpu_ratio": 0.4, "api.queue_time_p95": 0}
+	withForecast := func(v signals.Values) Env {
+		env := NewEnv(v, nil, nil)
+		env["ahead"] = map[string]any{"api": map[string]any{"cpu_ratio": 0.0}}
+		return env
+	}
+	for i := range 20 {
+		if got := st.update(p, withForecast(calm), now.Add(time.Duration(i)*5*time.Second)); got != "" {
+			t.Fatalf("idle shop raised API pressure: %s", got)
+		}
+	}
+	rising := signals.Values{"traffic.rate": 35, "api.cpu_ratio": 0.3, "api.queue_time_p95": 0}
+	for i := range 6 {
+		if got := st.update(p, withForecast(rising), now.Add(time.Duration(20+i)*5*time.Second)); got == "armed" {
+			t.Fatal("fleet pressure armed before 30 s of rising traffic")
+		}
+	}
+	if got := st.update(p, withForecast(rising), now.Add(130*time.Second)); got != "armed" {
+		t.Fatalf("sustained rising traffic did not arm fleet pressure: %s", got)
+	}
+}
+
+func TestReplicaLeadingReadTraffic(t *testing.T) {
+	p := pressure(catalog(t), "db-read")
+	now := time.Now()
+	st := &pressureState{}
+	values := signals.Values{
+		"traffic.rate": 270, "db.read_share": 0.8, "db.primary_cpu_ratio": 0.4,
+		"db.read_cpu_ratio": 0.4, "db.cpu_ratio": 0.4,
+	}
+	env := func() Env {
+		e := NewEnv(values, Genesis().StateEnv(), nil)
+		e["ahead"] = map[string]any{"db": map[string]any{
+			"primary_cpu_ratio": 0.5, "read_cpu_ratio": 0.5,
+		}}
+		return e
+	}
+	for i := range 10 {
+		if got := st.update(p, env(), now.Add(time.Duration(i)*5*time.Second)); got != "" {
+			t.Fatalf("replica pressure before read-heavy rate: %s", got)
+		}
+	}
+	values["traffic.rate"] = 300
+	for i := range 9 {
+		if got := st.update(p, env(), now.Add(time.Duration(10+i)*5*time.Second)); got == "armed" {
+			t.Fatal("replica pressure armed before 45 s of read-heavy traffic")
+		}
+	}
+	if got := st.update(p, env(), now.Add(95*time.Second)); got != "armed" {
+		t.Fatalf("sustained read-heavy traffic did not arm replica pressure: %s", got)
+	}
+}
+
+func TestReadPressureUsesShorterEvidenceWindowAfterReplica(t *testing.T) {
+	p := pressure(catalog(t), "db-read")
+	for _, tc := range []struct {
+		replicas int
+		want     time.Duration
+	}{{0, 45 * time.Second}, {1, 5 * time.Second}} {
+		st := &pressureState{}
+		now := time.Now()
+		var armedAt time.Duration
+		for i := range 20 {
+			at := time.Duration(i) * 5 * time.Second
+			if st.update(p, NewEnv(chapter2, map[string]any{"replicas": tc.replicas}, nil), now.Add(at)) == "armed" {
+				armedAt = at
+				break
+			}
+		}
+		if armedAt != tc.want {
+			t.Errorf("%d replicas: armed after %s, want %s", tc.replicas, armedAt, tc.want)
+		}
+	}
+}
+
+func TestReadReusePressureClearsAfterCache(t *testing.T) {
+	p := pressure(catalog(t), "read-reuse")
+	st := &pressureState{}
+	now := time.Now()
+	before := NewEnv(chapter3, map[string]any{"replicas": 1, "cache": false}, nil)
+	after := NewEnv(chapter3, map[string]any{"replicas": 1, "cache": true}, nil)
+	for i := range 4 {
+		st.update(p, before, now.Add(time.Duration(i)*5*time.Second))
+	}
+	if !st.Armed {
+		t.Fatal("repeated reads did not arm cache pressure")
+	}
+	cleared := false
+	for i := 4; i < 12; i++ {
+		at := now.Add(time.Duration(i) * 5 * time.Second)
+		if st.update(p, after, at) == "cleared" {
+			cleared = true
+		}
+	}
+	if !cleared || st.Armed {
+		t.Fatal("read-reuse pressure stayed armed after the cache was installed")
+	}
+}
+
 // fakeClock and fakeSource drive the loop in tests and in the twin.
 type fakeClock struct{ t time.Time }
 
@@ -141,9 +279,24 @@ func (f *fakeActuator) Ready(_ context.Context, probe string, _ map[string]any, 
 	return probe != f.fail, "", nil
 }
 
-type events struct{ kinds []string }
+type events struct {
+	kinds []string
+	all   []Event
+}
 
-func (e *events) Record(ev Event) { e.kinds = append(e.kinds, ev.Kind) }
+func (e *events) Record(ev Event) { e.kinds, e.all = append(e.kinds, ev.Kind), append(e.all, ev) }
+
+// slowActuator's actions take clock time, as an SSH script does on a real node.
+type slowActuator struct {
+	*fakeActuator
+	clock *fakeClock
+	takes map[string]time.Duration
+}
+
+func (s *slowActuator) Do(ctx context.Context, action string, params map[string]any, r *Run, m *Model) error {
+	s.clock.t = s.clock.t.Add(s.takes[action])
+	return s.fakeActuator.Do(ctx, action, params, r, m)
+}
 
 func newArchitect(t *testing.T, v signals.Values, act *fakeActuator) (*Architect, *fakeClock, *fakeSource, *events) {
 	clock := &fakeClock{t: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
@@ -198,6 +351,21 @@ func TestFleetMoveRunsToCompletion(t *testing.T) {
 	}
 }
 
+func TestReplicaCompletionUsesContractCooldown(t *testing.T) {
+	a, clock, _, _ := newArchitect(t, chapter1, &fakeActuator{})
+	if got := a.Catalog.Move("read-replica").CooldownAfter.D(); got != 15*time.Second {
+		t.Fatalf("replica cooldown %s, want 15s", got)
+	}
+	a.finish(&Run{Move: "read-replica"}, "completed", clock.t, nil)
+	if got := a.st.Cooldown.Sub(clock.t); got != 15*time.Second {
+		t.Fatalf("completed cooldown %s, want 15s", got)
+	}
+	a.finish(&Run{Move: "read-replica"}, "rolled_back", clock.t, nil)
+	if got := a.st.Cooldown.Sub(clock.t); got != time.Minute {
+		t.Fatalf("rollback cooldown %s, want 1m", got)
+	}
+}
+
 func TestFailingGuardPausesThenRollsBack(t *testing.T) {
 	act := &fakeActuator{}
 	a, clock, src, rec := newArchitect(t, chapter1, act)
@@ -248,5 +416,74 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	}
 	if b.st.Active == nil || b.st.Active.Move != a.st.Active.Move || b.st.Active.Step != a.st.Active.Step {
 		t.Fatal("a restarted architect did not resume the move")
+	}
+}
+
+// A blocking action must not eat the next step's hold. On the first playground run, a 17 s base
+// backup ran inside one tick, and the 20 s catch-up barrier then passed on the next tick.
+func TestHoldCountsFromAfterABlockingAction(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
+	src := &fakeSource{v: chapter1}
+	rec := &events{}
+	act := &slowActuator{fakeActuator: &fakeActuator{}, clock: clock, takes: map[string]time.Duration{"node.run": 17 * time.Second}}
+	a := &Architect{Catalog: catalog(t), Source: src, Act: act, Store: &MemoryStore{}, Clock: clock, Rec: rec, Cfg: DefaultConfig}
+	if err := a.Init(); err != nil {
+		t.Fatal(err)
+	}
+	tickFor(t, a, clock, 40*time.Second)
+	calm := signals.Values{}
+	for k, v := range chapter1 {
+		calm[k] = v
+	}
+	calm["api.queue_time_p95"], calm["api.cpu_ratio"] = 0.003, 0.45
+	src.v = calm
+	tickFor(t, a, clock, 5*time.Minute)
+	if len(a.st.History) != 1 || a.st.History[0].Verdict != "verified" {
+		t.Fatalf("the fleet move did not complete: %v", rec.kinds)
+	}
+	src.v = chapter2
+	tickFor(t, a, clock, 6*time.Minute)
+	steps := map[string]time.Time{}
+	for _, e := range rec.all {
+		if e.Kind == "step" && e.Move == "read-replica" {
+			steps[e.Step] = e.At
+		}
+	}
+	backup, caught := steps["basebackup"], steps["catch-up"]
+	if backup.IsZero() || caught.IsZero() {
+		t.Fatalf("the replica move did not reach catch-up: %v", rec.kinds)
+	}
+	if held := caught.Sub(backup); held < 20*time.Second {
+		t.Fatalf("catch-up held %s after the base backup, want at least its 20 s hold", held)
+	}
+}
+
+// The fleet's queue time is reported, not judged. On a playground the pressure armed on CPU with
+// queue p95 at 9.0 ms; four pods later, at 3.5 times the traffic, it was 8.2 ms. That passed the
+// check, and the relief comparison wrongly called it under-delivered.
+func TestFleetQueueTimeIsReportedNotJudged(t *testing.T) {
+	before := signals.Values{}
+	for k, v := range chapter1 {
+		before[k] = v
+	}
+	before["api.queue_time_p95"], before["traffic.rate"] = 0.009, 97
+	act := &fakeActuator{}
+	a, clock, src, _ := newArchitect(t, before, act)
+	tickFor(t, a, clock, 40*time.Second)
+	if a.st.Active == nil || a.st.Active.Move != "autoscaled-fleet" {
+		t.Fatal("no fleet move started")
+	}
+	after := signals.Values{}
+	for k, v := range before {
+		after[k] = v
+	}
+	after["api.queue_time_p95"], after["api.cpu_ratio"], after["traffic.rate"] = 0.0082, 0.53, 342
+	src.v = after
+	tickFor(t, a, clock, 5*time.Minute)
+	if len(a.st.History) != 1 {
+		t.Fatal("the move did not finish")
+	}
+	if r := a.st.History[0]; r.Verdict != "verified" {
+		t.Fatalf("verdict %q (baseline %.4f, after %.4f)", r.Verdict, r.Baseline, r.After)
 	}
 }

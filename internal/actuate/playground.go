@@ -44,13 +44,17 @@ type Config struct {
 	PoolerDSN    string            `json:"pooler_dsn"`    // PgBouncer, as the API connects to it
 	ConfigURL    string            `json:"config_url"`    // the runtime config document, as instances fetch it
 	ClusterDNS   string            `json:"cluster_dns"`   // CoreDNS's service IP, for nginx's resolver
-	LegacyServer string            `json:"legacy_server"` // the genesis process, as nginx reaches it
+	LegacyServer string            `json:"legacy_server"` // the genesis process, as nginx on its own node reaches it
+	LegacyAddr   string            `json:"legacy_addr"`   // the genesis process, as the architect reaches it from ops-01
 	FleetHost    string            `json:"fleet_host"`    // the headless Service's DNS name
 	APIPort      int               `json:"api_port"`
 }
 
 // NewPlayground connects to the playground's Kubernetes API.
 func NewPlayground(cfg Config, runtime *runtimecfg.Store, manifests fs.FS, log *slog.Logger) (*Playground, error) {
+	if cfg.LegacyServer == "" || cfg.LegacyAddr == "" {
+		return nil, fmt.Errorf("playground config needs legacy_server (for nginx) and legacy_addr (for the architect)")
+	}
 	k, err := kube.New(cfg.KubeServer, cfg.KubeTokenFile, cfg.KubeCAFile)
 	if err != nil {
 		return nil, err
@@ -418,7 +422,7 @@ func (p *Playground) instanceVersion(ctx context.Context, addr string) (int, err
 func (p *Playground) instances(ctx context.Context, model *architect.Model) ([]string, error) {
 	var out []string
 	if model.Facts["api_mode"] == "systemd" {
-		out = append(out, p.Cfg.LegacyServer)
+		out = append(out, p.Cfg.LegacyAddr)
 	}
 	ips, err := p.readyPods(ctx, "api")
 	if err != nil {

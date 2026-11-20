@@ -1,0 +1,9 @@
+#!/bin/bash
+# Change only the replica's CPU quota. The replica migration uses its reserved spare capacity.
+set -euo pipefail
+case "${1:-}" in
+  65%|100%|150%) ;;
+  *) echo "allowed replica quotas: 65%, 100%, or 150%" >&2; exit 64 ;;
+esac
+systemctl set-property --runtime gp-pg-replica.service CPUQuota="$1"
+systemctl show -p CPUQuotaPerSecUSec --value gp-pg-replica.service

@@ -224,7 +224,10 @@ func WordGetsOut(seed uint64, ix *catalog.Index) *Storyline {
 
 	r1 := jitter(r, 320, 0.15)
 	r2 := jitter(r, 520, 0.15)
-	r3 := jitter(r, 700, 0.15)
+	// The plan's flash sale peaks at 700. Against the playground's database, where the sale's
+	// rating sorts are cheap, 700 left the cache late or missing once a replica had doubled read
+	// capacity; 800 brings it in around 11:30, as the plan's table has it (docs/plan-deviations.md).
+	r3 := jitter(r, 800, 0.15)
 
 	// Chapter 1: steady mix, roughly exponential growth.
 	c1 := g

@@ -18,7 +18,7 @@ case "$name" in
     systemctl enable --no-block --now postgresql@18-main.service nginx.service gp-api.service ;;
   node-04)
     role=data taint="growing-pains/dormant=true:NoSchedule"
-    args="$args -db=replica-1=$(cat /etc/gp/agent-dsn | sed 's/host=[^ ]*/host=127.0.0.1/')" ;;
+    args="$args -db=replica-1=$(cat /etc/gp/agent-dsn)" ;;
   *)
     role=compute taint="growing-pains/dormant=true:NoSchedule" ;;
 esac

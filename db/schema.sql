@@ -8,6 +8,9 @@
 -- pg_stat_statements keeps, so the agent can class database time as reads or writes.
 
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+-- Search starts with an index: rare terms, typos, and three-character typing prefixes must
+-- not scan the entire catalog while a fractional CPU quota is busy with listing sorts.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE categories (
     category_id integer PRIMARY KEY,
@@ -42,6 +45,8 @@ CREATE INDEX products_category ON products (category_id, created_at DESC);
 -- For the listing's price sorts and price facets.
 CREATE INDEX products_category_price ON products (category_id, price_cents);
 CREATE INDEX products_created ON products (created_at DESC);
+CREATE INDEX products_title_trgm ON products USING gin (title gin_trgm_ops);
+CREATE INDEX products_description_trgm ON products USING gin (description gin_trgm_ops);
 
 -- New products take their number within the seller from here, above every base product.
 CREATE SEQUENCE product_local_seq START 500000 MAXVALUE 999999;

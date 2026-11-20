@@ -1968,7 +1968,7 @@
   {
    "id": 32,
    "type": "row",
-   "title": "Pressure",
+   "title": "Architecture",
    "collapsed": false,
    "gridPos": {
     "x": 0,
@@ -1980,6 +1980,817 @@
   },
   {
    "id": 33,
+   "type": "canvas",
+   "title": "Living architecture",
+   "description": "Grey outlines are dormant or retired; green is active; amber is migrating. Driven by the architect's component state.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 53,
+    "w": 24,
+    "h": 12
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"nginx\",node=\"node-01\"}[20s])) or vector(0)",
+     "legendFormat": "edge",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"api-legacy\",node=\"node-01\"}[20s])) or vector(0)",
+     "legendFormat": "legacy",
+     "refId": "B",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"pg-primary\",node=\"node-01\"}[20s])) or vector(0)",
+     "legendFormat": "primary",
+     "refId": "C",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"api-fleet\",node=\"node-02\"}[20s])) or vector(0)",
+     "legendFormat": "fleet_02",
+     "refId": "D",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"api-fleet\",node=\"node-03\"}[20s])) or vector(0)",
+     "legendFormat": "fleet_03",
+     "refId": "E",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"pg-replica-1\",node=\"node-04\"}[20s])) or vector(0)",
+     "legendFormat": "replica",
+     "refId": "F",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max(last_over_time(gp_component_state{component=\"valkey\",node=\"node-04\"}[20s])) or vector(0)",
+     "legendFormat": "cache",
+     "refId": "G",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#e5e7eb",
+        "value": null
+       },
+       {
+        "color": "#3f9f5f",
+        "value": 1
+       },
+       {
+        "color": "#e0a030",
+        "value": 2
+       },
+       {
+        "color": "#8a8a8a",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "inlineEditing": false,
+    "showAdvancedTypes": false,
+    "panZoom": false,
+    "zoomToContent": true,
+    "tooltip": {
+     "mode": "none"
+    },
+    "root": {
+     "name": "architecture",
+     "type": "frame",
+     "elements": [
+      {
+       "name": "flow",
+       "type": "rectangle",
+       "placement": {
+        "left": 20,
+        "top": 5,
+        "width": 880,
+        "height": 30
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "Crowd \u2192 nginx \u2192 API \u2192 PostgreSQL"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#ffffff"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "ops-01",
+       "type": "rectangle",
+       "placement": {
+        "left": 20,
+        "top": 48,
+        "width": 160,
+        "height": 244
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "ops-01 \u00b7 Control"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "node-01",
+       "type": "rectangle",
+       "placement": {
+        "left": 200,
+        "top": 48,
+        "width": 160,
+        "height": 244
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "node-01 \u00b7 Edge + primary"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "node-02",
+       "type": "rectangle",
+       "placement": {
+        "left": 380,
+        "top": 48,
+        "width": 160,
+        "height": 244
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "node-02 \u00b7 Compute"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "node-03",
+       "type": "rectangle",
+       "placement": {
+        "left": 560,
+        "top": 48,
+        "width": 160,
+        "height": 244
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "node-03 \u00b7 Compute"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "node-04",
+       "type": "rectangle",
+       "placement": {
+        "left": 740,
+        "top": 48,
+        "width": 160,
+        "height": 244
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "node-04 \u00b7 Data + cache"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "shop control",
+       "type": "rectangle",
+       "placement": {
+        "left": 35,
+        "top": 100,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "Architect \u00b7 Crowd"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#ffffff"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "edge",
+       "type": "rectangle",
+       "placement": {
+        "left": 215,
+        "top": 100,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "nginx"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "edge"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "legacy",
+       "type": "rectangle",
+       "placement": {
+        "left": 215,
+        "top": 150,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "API process"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "legacy"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "primary",
+       "type": "rectangle",
+       "placement": {
+        "left": 215,
+        "top": 200,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "PostgreSQL primary"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "primary"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "fleet-02",
+       "type": "rectangle",
+       "placement": {
+        "left": 395,
+        "top": 100,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "API fleet"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "fleet_02"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "fleet-03",
+       "type": "rectangle",
+       "placement": {
+        "left": 575,
+        "top": 100,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "API fleet"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "fleet_03"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "replica",
+       "type": "rectangle",
+       "placement": {
+        "left": 755,
+        "top": 100,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "Read replica"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "replica"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      },
+      {
+       "name": "cache",
+       "type": "rectangle",
+       "placement": {
+        "left": 755,
+        "top": 150,
+        "width": 130,
+        "height": 40
+       },
+       "constraint": {
+        "horizontal": "left",
+        "vertical": "top"
+       },
+       "config": {
+        "text": {
+         "mode": "fixed",
+         "fixed": "Valkey cache"
+        },
+        "align": "center",
+        "valign": "middle",
+        "size": 14,
+        "color": {
+         "fixed": "#313842"
+        }
+       },
+       "background": {
+        "color": {
+         "fixed": "#f1f3f5",
+         "field": "cache"
+        }
+       },
+       "border": {
+        "width": 1,
+        "color": {
+         "fixed": "#b7bdc7"
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": 34,
+   "type": "state-timeline",
+   "title": "Component states",
+   "description": "1 active, 2 migrating, 3 retired; new series appear when capacity is acquired.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 65,
+    "w": 24,
+    "h": 7
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "gp_component_state{kind=~\"api|api-fleet|postgres-primary|postgres-replica|valkey\"}",
+     "legendFormat": "{{component}} @ {{node}}",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#8a8a8a",
+        "value": null
+       },
+       {
+        "color": "#3f9f5f",
+        "value": 1
+       },
+       {
+        "color": "#e0a030",
+        "value": 2
+       },
+       {
+        "color": "#8a8a8a",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "mergeValues": true,
+    "showValue": "auto",
+    "rowHeight": 0.8
+   }
+  },
+  {
+   "id": 35,
+   "type": "table",
+   "title": "Move history and change-window errors",
+   "description": "One row per finished move: decision and completion time, duration in seconds, verdict, change-window requests, and failed requests (Value). Open the narrator's decision records for the evidence and alternatives.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 72,
+    "w": 24,
+    "h": 7
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "gp_narrator_move_change_errors",
+     "legendFormat": "__auto",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "attempt": true,
+       "instance": true,
+       "job": true
+      },
+      "indexByName": {
+       "move": 0,
+       "decided_at": 1,
+       "ended_at": 2,
+       "duration_s": 3,
+       "requests": 4,
+       "Value": 5,
+       "verdict": 6
+      },
+      "renameByName": {
+       "move": "Move",
+       "decided_at": "Decided",
+       "ended_at": "Verified",
+       "duration_s": "Duration (s)",
+       "requests": "Requests",
+       "Value": "Errors",
+       "verdict": "Verdict"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 36,
+   "type": "row",
+   "title": "Pressure",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 79,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "id": 37,
    "type": "timeseries",
    "title": "Pressure signals against thresholds",
    "description": "Each signal the architect watches. A pressure arms when its signal stays over threshold for its sustain window.",
@@ -1989,7 +2800,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 53,
+    "y": 80,
     "w": 16,
     "h": 8
    },
@@ -2047,7 +2858,7 @@
    }
   },
   {
-   "id": 34,
+   "id": 38,
    "type": "stat",
    "title": "Armed pressures",
    "description": "",
@@ -2057,7 +2868,7 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 53,
+    "y": 80,
     "w": 8,
     "h": 8
    },
@@ -2112,20 +2923,20 @@
    }
   },
   {
-   "id": 35,
+   "id": 39,
    "type": "row",
    "title": "Capacity",
    "collapsed": false,
    "gridPos": {
     "x": 0,
-    "y": 61,
+    "y": 88,
     "w": 24,
     "h": 1
    },
    "panels": []
   },
   {
-   "id": 36,
+   "id": 40,
    "type": "timeseries",
    "title": "CPU by component against its cap",
    "description": "",
@@ -2135,7 +2946,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 62,
+    "y": 89,
     "w": 12,
     "h": 8
    },
@@ -2211,7 +3022,7 @@
    }
   },
   {
-   "id": 37,
+   "id": 41,
    "type": "timeseries",
    "title": "API queue time p95",
    "description": "Time from nginx accepting a request to the handler starting: the leading signal for api-compute.",
@@ -2221,7 +3032,7 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 62,
+    "y": 89,
     "w": 6,
     "h": 8
    },
@@ -2286,7 +3097,7 @@
    }
   },
   {
-   "id": 38,
+   "id": 42,
    "type": "timeseries",
    "title": "API instances",
    "description": "",
@@ -2296,7 +3107,7 @@
    },
    "gridPos": {
     "x": 18,
-    "y": 62,
+    "y": 89,
     "w": 6,
     "h": 8
    },
@@ -2365,20 +3176,20 @@
    }
   },
   {
-   "id": 39,
+   "id": 43,
    "type": "row",
    "title": "Data tier",
    "collapsed": false,
    "gridPos": {
     "x": 0,
-    "y": 70,
+    "y": 97,
     "w": 24,
     "h": 1
    },
    "panels": []
   },
   {
-   "id": 40,
+   "id": 44,
    "type": "timeseries",
    "title": "Database CPU against its cap",
    "description": "",
@@ -2388,7 +3199,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 71,
+    "y": 98,
     "w": 8,
     "h": 8
    },
@@ -2453,7 +3264,7 @@
    }
   },
   {
-   "id": 41,
+   "id": 45,
    "type": "timeseries",
    "title": "Database time: reads vs writes",
    "description": "",
@@ -2463,7 +3274,7 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 71,
+    "y": 98,
     "w": 8,
     "h": 8
    },
@@ -2521,7 +3332,7 @@
    }
   },
   {
-   "id": 42,
+   "id": 46,
    "type": "timeseries",
    "title": "Connections and replication",
    "description": "",
@@ -2531,7 +3342,7 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 71,
+    "y": 98,
     "w": 8,
     "h": 8
    },
@@ -2611,7 +3422,7 @@
    }
   },
   {
-   "id": 43,
+   "id": 47,
    "type": "timeseries",
    "title": "Cache",
    "description": "Empty until a cache exists.",
@@ -2621,7 +3432,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 79,
+    "y": 106,
     "w": 8,
     "h": 8
    },
@@ -2680,7 +3491,7 @@
    }
   },
   {
-   "id": 44,
+   "id": 48,
    "type": "timeseries",
    "title": "Read routing",
    "description": "Empty until a replica exists.",
@@ -2690,7 +3501,7 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 79,
+    "y": 106,
     "w": 8,
     "h": 8
    },
@@ -2748,7 +3559,7 @@
    }
   },
   {
-   "id": 45,
+   "id": 49,
    "type": "timeseries",
    "title": "Sequential scans on large tables",
    "description": "",
@@ -2758,7 +3569,7 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 79,
+    "y": 106,
     "w": 8,
     "h": 8
    },
@@ -2816,25 +3627,25 @@
    }
   },
   {
-   "id": 46,
+   "id": 50,
    "type": "row",
    "title": "Narration",
    "collapsed": false,
    "gridPos": {
     "x": 0,
-    "y": 87,
+    "y": 114,
     "w": 24,
     "h": 1
    },
    "panels": []
   },
   {
-   "id": 47,
+   "id": 51,
    "type": "annolist",
    "title": "What the traffic made the system do",
    "gridPos": {
     "x": 0,
-    "y": 88,
+    "y": 115,
     "w": 24,
     "h": 10
    },

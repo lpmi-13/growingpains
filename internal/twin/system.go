@@ -38,11 +38,15 @@ type System struct {
 	PrimaryWeight             float64 // the primary's weight in the read pool, against 1 per replica
 	Pooled                    bool    // the fleet connects through PgBouncer
 
-	lastRate, lastDBSecondsPerRequest float64
-	CacheUp                           bool
-	CachePct                          float64
-	PrimaryCores                      float64
-	ReplicaCores                      float64
+	lastRate, lastDBSecondsPerRequest   float64
+	lastJourneyRates, lastJourneyErrors map[string]float64
+	// The last step's cache hits, as shares of all listing and of all product reads (bypass included).
+	lastHitListing, lastHitDetail float64
+	CacheUp                       bool
+	CachePct                      float64
+	PrimaryCores                  float64
+	ReplicaCores                  float64
+	DBUnit                        float64 // the cap of one db.medium instance, in playground cores
 
 	// Shape, recomputed every repeatEvery.
 	repeat        map[string]float64
@@ -57,12 +61,26 @@ const repeatEvery = 15 * time.Second
 // meanSteps matches the crowd's mean session length.
 const meanSteps = 5.0
 
-// NewSystem is genesis: one API process, one database, nothing else.
-func NewSystem(ix *catalog.Index, story *storyline.Storyline, seed uint64, costs Costs) *System {
+// tokenNotReplayed is the share of token-carrying reads routed to a replica that go back to the
+// primary because the replica has not replayed their write yet. Measured in a flash sale on the
+// playground (2026-11-15): 14.7 a second of about 110.
+const tokenNotReplayed = 0.13
+
+// PlaygroundDBCores is one db.medium database instance on the playground: the CPU quota of the
+// primary's and each replica's unit, in playground cores. The plan sizes db.medium at 1.5 cores,
+// and the architect's ledger still books it so, as it books the genesis API at one core under a
+// 40% cap: these are the storyline's capacity units. The re-fitted twin puts the cap here, where
+// the storyline takes fleet → replica → cache with the widest margin (docs/calibration.md).
+// rootfs_test.go checks the images agree.
+const PlaygroundDBCores = 0.65
+
+// NewSystem is genesis: one API process, one database, nothing else. Each database instance's
+// CPU cap is dbCores, in playground cores.
+func NewSystem(ix *catalog.Index, story *storyline.Storyline, seed uint64, costs Costs, dbCores float64) *System {
 	return &System{
 		costs: costs, ix: ix, story: story, picker: traffic.NewPicker(ix, story, seed),
 		r:            rng.Stream(seed, "twin", 0),
-		LegacyWeight: 100, LegacyUp: true, FleetMax: 6, PrimaryCores: 1.5, ReplicaCores: 1.5,
+		LegacyWeight: 100, LegacyUp: true, FleetMax: 6, PrimaryCores: dbCores, ReplicaCores: dbCores, DBUnit: dbCores,
 		repeat: map[string]float64{},
 	}
 }
@@ -166,9 +184,23 @@ func (s *System) Explain(st storyline.State) []string {
 		db += r.rate * r.db * c.DBOverhead
 		out = append(out, fmt.Sprintf("%-9s %7.1f/s  api %5.2f ms %5.3f cores   db %6.2f ms %5.3f cores", r.name, r.rate, r.api, r.rate*r.api/1000, r.db*c.DBOverhead, r.rate*r.db*c.DBOverhead/1000))
 	}
-	out = append(out, fmt.Sprintf("total %.0f req/s: api %.2f cores (%.2f ms/req), db %.2f cores (%.2f ms/req), token share %.2f, listing db exec %.2f ms",
-		l.rate, api/1000, api/l.rate, db/1000, db/l.rate, l.tokenShare, l.listingDB))
-	return out
+	out = append(out, fmt.Sprintf("total %.0f req/s: api %.2f cores (%.2f ms/req), db %.2f cores (%.2f ms/req, plus %.2f cores at rest), token share %.2f, listing db exec %.2f ms",
+		l.rate, api/1000, api/l.rate, db/1000+c.DBBaseCores, db/l.rate, c.DBBaseCores, l.tokenShare, l.listingDB))
+	// The listing's sort statements, to compare with pg_stat_statements (calls and ms per call).
+	var n, ms [4]float64
+	const samples = 4000
+	for range samples {
+		lv := s.picker.Listing(s.r, st.Mix)
+		n[lv.Sort]++
+		ms[lv.Sort] += c.ListingDB(lv) - c.DBFacets
+	}
+	line := "listing sorts:"
+	for i, name := range traffic.SortNames {
+		if n[i] > 0 {
+			line += fmt.Sprintf("  %s %.0f%% %.2f ms", name, 100*n[i]/samples, ms[i]/n[i])
+		}
+	}
+	return append(out, line+fmt.Sprintf("  (facets %.2f ms on each)", c.DBFacets))
 }
 
 // sampleRepeat draws a minute of listing and product views and measures repetition the way the
@@ -240,15 +272,25 @@ func (s *System) Step(st storyline.State, now time.Time) signals.Values {
 	routable := l.home*c.DBHome + l.listing*l.listingDB*(1-hitListing) + (l.detail+l.reread)*c.DBDetail*(1-hitDetail) +
 		(l.search+l.searchKeystrokes)*c.DBSearch
 	writeMS := l.order*c.DBOrder + l.review*c.DBReview + l.create*c.DBCreate + l.patch*c.DBPatch + l.delete*c.DBDelete + l.variants*c.DBVariants
+	// Reads with a read-your-writes token never use the cache, so once it is up they are a larger
+	// share of what reaches the database than of the traffic. They take the read pool like any
+	// other read, and go back to the primary only when the chosen replica has not replayed their
+	// write yet (shop/gp_shop/db.py, choose).
+	tokenMS := l.tokenShare * (l.home*c.DBHome + l.listing*l.listingDB + (l.detail+l.reread)*c.DBDetail +
+		(l.search+l.searchKeystrokes)*c.DBSearch)
 	toReplica := 0.0
 	if s.ReplicaUp {
-		toReplica = routable * (1 - l.tokenShare) * s.ReplicaPct / 100 / (1 + s.PrimaryWeight)
+		toReplica = (routable - tokenMS*tokenNotReplayed) * s.ReplicaPct / 100 / (1 + s.PrimaryWeight)
 	}
-	primaryCores := (routable - toReplica + writeMS) * c.DBOverhead / 1000
+	primaryCores := c.DBBaseCores + (routable-toReplica+writeMS)*c.DBOverhead/1000
 	// Wall time in the database per request: execution plus about 0.2 ms of round trip per statement.
 	s.lastRate = l.rate
+	s.lastHitListing, s.lastHitDetail = hitListing, hitDetail
 	s.lastDBSecondsPerRequest = ((routable+writeMS)/math.Max(l.rate, 1e-9) + 13*0.2) / 1000
-	replicaCores := toReplica * c.DBOverhead / 1000
+	replicaCores := 0.0
+	if s.ReplicaUp {
+		replicaCores = c.DBBaseCores + toReplica*c.DBOverhead/1000
+	}
 
 	// API capacity and the HPA.
 	legacyShare, fleetShare := 1.0, 0.0
@@ -288,7 +330,9 @@ func (s *System) Step(st storyline.State, now time.Time) signals.Values {
 	}
 	dbRho := math.Max(primaryRho, replicaRho)
 
-	// Errors: work beyond a unit's capacity times out.
+	// Errors: work beyond a unit's capacity times out. A quota can also make long
+	// searches time out before it is fully used; that risk belongs to the search
+	// journey, rather than to every request equally.
 	overload := func(rho float64) float64 {
 		if rho <= 1 {
 			return 0
@@ -297,7 +341,23 @@ func (s *System) Step(st storyline.State, now time.Time) signals.Values {
 	}
 	apiErr := legacyShare*overload(legacyRho) + fleetShare*overload(fleetRho)
 	dbErr := overload(dbRho) * 0.8
-	errRatio := math.Min(1, apiErr+dbErr*(1-apiErr))
+	baseErr := math.Min(1, apiErr+dbErr*(1-apiErr))
+	replicaSearchShare := s.searchReplicaShare(l.tokenShare)
+	searchTail := replicaSearchShare * searchTimeoutUnderQuota(replicaCores, s.ReplicaCores, c.DBSearch/unindexedSearchMS)
+	s.lastJourneyRates = l.journeyRates()
+	s.lastJourneyErrors = make(map[string]float64, len(journeys))
+	for _, journey := range journeys {
+		s.lastJourneyErrors[journey] = baseErr
+	}
+	s.lastJourneyErrors["search"] = baseErr + (1-baseErr)*searchTail
+	// Keep the architect's aggregate error signal in the same units as the crowd's requests.
+	var attempted, failed float64
+	for _, journey := range journeys {
+		rate := s.lastJourneyRates[journey]
+		attempted += rate
+		failed += rate * s.lastJourneyErrors[journey]
+	}
+	errRatio := failed / math.Max(attempted, 1e-9)
 
 	queue := func(rho, service float64) float64 {
 		rho = math.Min(rho, 0.999)

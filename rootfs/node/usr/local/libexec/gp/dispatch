@@ -6,7 +6,7 @@ read -r -a words <<<"${SSH_ORIGINAL_COMMAND:-}"
 action="${words[0]:-}"
 args=("${words[@]:1}")
 case "$action" in
-  nginx-apply|api-legacy-stop|pg-replica-create|pg-replica-remove|pg-cap|pgbouncer-start|pgbouncer-stop|status) ;;
+  nginx-apply|api-legacy-stop|pg-replica-create|pg-replica-remove|pg-cap|pg-replica-cap|pgbouncer-start|pgbouncer-stop|status) ;;
   *) logger -t gp-dispatch "refused: ${SSH_ORIGINAL_COMMAND:-}"; echo "refused: $action" >&2; exit 64 ;;
 esac
 for a in "${args[@]}"; do

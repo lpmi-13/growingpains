@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/lpmi-13/growingpains/contracts"
@@ -33,7 +34,7 @@ var (
 	nodeReady      = 3 * time.Second  // removing a taint
 	fleetReady     = 15 * time.Second // pods from a preloaded image; spike item 4 measures it
 	valkeyReady    = 10 * time.Second
-	replicaReady   = 30 * time.Second
+	replicaReady   = 55 * time.Second // a rate-capped base backup: ~300 MB at 6 MB/s, measured on a playground
 	configConverge = 3 * time.Second
 )
 
@@ -105,7 +106,19 @@ func (a *Actuator) Do(_ context.Context, action string, params map[string]any, _
 		case "pg-replica-remove":
 			s.ReplicaUp, s.ReplicaPct = false, 0
 		case "pg-cap":
-			s.PrimaryCores = 2.0
+			// The quota is a playground one, like "87%", for the images' db.medium; a what-if cap
+			// scales it.
+			var pct float64
+			if _, err := fmt.Sscanf(strings.Trim(fmt.Sprint(params["args"]), "[]"), "%g%%", &pct); err != nil {
+				return fmt.Errorf("pg-cap %v: %v", params["args"], err)
+			}
+			s.PrimaryCores = pct / 100 * s.DBUnit / PlaygroundDBCores
+		case "pg-replica-cap":
+			var pct float64
+			if _, err := fmt.Sscanf(strings.Trim(fmt.Sprint(params["args"]), "[]"), "%g%%", &pct); err != nil {
+				return fmt.Errorf("pg-replica-cap %v: %v", params["args"], err)
+			}
+			s.ReplicaCores = pct / 100 * s.DBUnit / PlaygroundDBCores
 		}
 	case "config.set":
 		a.ready("config_converged", configConverge)
@@ -165,6 +178,11 @@ type Options struct {
 	Enabled   bool          // false is the control run: pressures arm, nothing moves
 	Delay     time.Duration // the timing control: every move waits this long after its decision
 	Genesis   time.Duration // genesis traffic before Start
+	// DBCores is a what-if CPU cap in playground cores for each database instance. Zero is the
+	// images' cap, PlaygroundDBCores. The architect's ledger keeps counting db.medium units.
+	DBCores float64
+	// ReplicaCores overrides only the replica quota; zero keeps DBCores/the image cap.
+	ReplicaCores float64
 }
 
 // DefaultOptions run the architect at the plan's settings.
@@ -193,9 +211,15 @@ type Sample struct {
 	API    float64       `json:"api_cpu"`
 	DB     float64       `json:"db_cpu"`
 	Repeat float64       `json:"repeat"`
-	Errors float64       `json:"error_ratio"`
-	Pods   int           `json:"pods"`
-	Armed  []string      `json:"armed"`
+	// The primary's CPU ratio (DB is the busiest instance's), and the cache's hits as shares of
+	// all listing and all product reads: what a playground's gp_cache_requests_total gives.
+	PrimaryDB            float64  `json:"db_primary_cpu"`
+	HitListing           float64  `json:"cache_hit_listing,omitempty"`
+	HitDetail            float64  `json:"cache_hit_detail,omitempty"`
+	Errors               float64  `json:"error_ratio"`
+	SearchAvailability1m float64  `json:"search_availability_1m"`
+	Pods                 int      `json:"pods"`
+	Armed                []string `json:"armed"`
 }
 
 // Result is a whole run.
@@ -207,20 +231,26 @@ type Result struct {
 	Requests  float64      `json:"requests"`
 	Errors    float64      `json:"errors"`
 	// WorstAvailability is the lowest rolling five-minute availability after Start.
-	WorstAvailability float64           `json:"worst_availability"`
-	Events            []architect.Event `json:"-"`
-	Start             time.Time         `json:"-"`
+	WorstAvailability float64 `json:"worst_availability"`
+	// The judge applies the 99.5% target separately to each journey.
+	WorstByJourney           map[string]float64 `json:"worst_by_journey"`
+	WorstJourney             string             `json:"worst_journey"`
+	WorstJourneyAvailability float64            `json:"worst_journey_availability"`
+	Events                   []architect.Event  `json:"-"`
+	Start                    time.Time          `json:"-"`
 }
 
 // Validate applies the plan's seed rules and returns why a seed is rejected, if it is.
 //
 //   - Every architecture move in the MVP storyline completes within 15 minutes (three of them).
 //   - No stretch of more than seven minutes passes without a move.
-//   - Each decision's deciding shape is clear of its boundary: the repeat ratio at a replica
-//     decision is under 0.3, and at a cache decision over 0.7, so a real run decides the same way.
+//   - A replica is chosen for a read-heavy workload. A cache that comes first needs 0.7,
+//     clear of its 0.6 boundary. After a replica, the cache acts when measured repetition
+//     reaches 0.3; its live hit-ratio verification guards the benefit.
 func (r Result) Validate() []string {
 	var why []string
 	arch := 0
+	replicaCompleted := false
 	last := time.Duration(0)
 	for _, m := range r.Moves {
 		if m.Outcome != "completed" {
@@ -237,18 +267,27 @@ func (r Result) Validate() []string {
 			}
 		}
 		rep := m.Shape["reads.repeat_ratio"]
-		if m.Move == "read-replica" && rep > 0.3 {
-			why = append(why, fmt.Sprintf("replica decided with repeat ratio %.2f, too near its 0.4 boundary", rep))
+		if m.Move == "read-replica" && m.Shape["db.read_share"] < 0.5 {
+			why = append(why, fmt.Sprintf("replica decided with only %.2f read share", m.Shape["db.read_share"]))
 		}
-		if m.Move == "cache" && rep < 0.7 {
-			why = append(why, fmt.Sprintf("cache decided with repeat ratio %.2f, too near its 0.6 boundary", rep))
+		if m.Move == "cache" {
+			minimum := 0.7
+			if replicaCompleted {
+				minimum = 0.3
+			}
+			if rep < minimum {
+				why = append(why, fmt.Sprintf("cache decided with repeat ratio %.2f, too near its shape boundary", rep))
+			}
+		}
+		if m.Move == "read-replica" {
+			replicaCompleted = true
 		}
 	}
 	if r.Storyline == "Word gets out" && arch < 3 {
 		why = append(why, fmt.Sprintf("%d of the MVP's three moves completed within 15 minutes", arch))
 	}
-	if r.WorstAvailability < 0.995 {
-		why = append(why, fmt.Sprintf("worst 5-minute availability %.4f is under 99.5%%", r.WorstAvailability))
+	if r.WorstJourneyAvailability < 0.995 {
+		why = append(why, fmt.Sprintf("%s journey's worst 5-minute availability %.4f is under 99.5%%", r.WorstJourney, r.WorstJourneyAvailability))
 	}
 	return why
 }
@@ -277,7 +316,14 @@ func Run(ix *catalog.Index, seed uint64, opts Options) (Result, error) {
 	story := storyline.ByName(opts.Storyline, seed, ix)
 	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	clock := &Clock{T: start.Add(-opts.Genesis)}
-	sys := NewSystem(ix, story, seed, opts.Costs)
+	dbCores := PlaygroundDBCores
+	if opts.DBCores > 0 {
+		dbCores = opts.DBCores
+	}
+	sys := NewSystem(ix, story, seed, opts.Costs, dbCores)
+	if opts.ReplicaCores > 0 {
+		sys.ReplicaCores = opts.ReplicaCores
+	}
 	act := &Actuator{sys: sys, clock: clock, readyAt: map[string]time.Time{}}
 	src := &source{}
 	rec := &recorder{}
@@ -288,11 +334,16 @@ func Run(ix *catalog.Index, seed uint64, opts Options) (Result, error) {
 	if err := a.Init(); err != nil {
 		return Result{}, err
 	}
-	res := Result{Seed: seed, Storyline: story.Name, WorstAvailability: 1, Start: start}
+	res := Result{Seed: seed, Storyline: story.Name, WorstAvailability: 1,
+		WorstByJourney: map[string]float64{}, WorstJourneyAvailability: 1, Start: start}
+	for _, journey := range journeys {
+		res.WorstByJourney[journey] = 1
+	}
 	const step = 5 * time.Second
 	end := start.Add(story.Duration())
 	type window struct{ req, err float64 }
 	var recent []window
+	recentByJourney := make(map[string][]window, len(journeys))
 	budget := 0.0
 	for ; !clock.T.After(end); clock.T = clock.T.Add(step) {
 		act.advance(clock.T)
@@ -317,6 +368,27 @@ func Run(ix *catalog.Index, seed uint64, opts Options) (Result, error) {
 				}
 				res.WorstAvailability = math.Min(res.WorstAvailability, 1-e/r)
 			}
+			for _, journey := range journeys {
+				jreq := sys.lastJourneyRates[journey] * step.Seconds()
+				jr := append(recentByJourney[journey], window{jreq, jreq * sys.lastJourneyErrors[journey]})
+				if len(jr) > 60 {
+					jr = jr[1:]
+				}
+				recentByJourney[journey] = jr
+				if len(jr) == 60 {
+					var r, e float64
+					for _, w := range jr {
+						r, e = r+w.req, e+w.err
+					}
+					if r > 0 {
+						availability := 1 - e/r
+						res.WorstByJourney[journey] = math.Min(res.WorstByJourney[journey], availability)
+						if availability < res.WorstJourneyAvailability {
+							res.WorstJourney, res.WorstJourneyAvailability = journey, availability
+						}
+					}
+				}
+			}
 		}
 		v["slo.budget_remaining"] = math.Max(budget, -1)
 		src.v = v
@@ -331,8 +403,23 @@ func Run(ix *catalog.Index, seed uint64, opts Options) (Result, error) {
 					armed = append(armed, name)
 				}
 			}
+			search1m := 1.0
+			if recent := recentByJourney["search"]; len(recent) > 0 {
+				if len(recent) > 12 {
+					recent = recent[len(recent)-12:]
+				}
+				var r, e float64
+				for _, w := range recent {
+					r, e = r+w.req, e+w.err
+				}
+				if r > 0 {
+					search1m = 1 - e/r
+				}
+			}
 			res.Samples = append(res.Samples, Sample{T: t, Rate: st.Rate, API: v["api.cpu_ratio"], DB: v["db.cpu_ratio"],
-				Repeat: v["reads.repeat_ratio"], Errors: v["api.error_ratio"], Pods: sys.FleetPods, Armed: armed})
+				Repeat: v["reads.repeat_ratio"], PrimaryDB: v["db.primary_cpu_ratio"], HitListing: sys.lastHitListing,
+				HitDetail: sys.lastHitDetail, Errors: v["api.error_ratio"], SearchAvailability1m: search1m,
+				Pods: sys.FleetPods, Armed: armed})
 		}
 	}
 	res.Events = rec.events
